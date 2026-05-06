@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-const API_BASE_URL = 'http://127.0.0.1:18000'
+const API_BASE_URL = 'http://localhost:8000'
 
 function formatNotificationTime(value) {
   if (!value) return ''

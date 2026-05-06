@@ -178,7 +178,7 @@ export default function ChatbotPage() {
     setLoading(true)
 
     try {
-      const response = await fetch('http://127.0.0.1:18000/api/v1/chat', {
+      const response = await fetch('http://localhost:8000/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: currentInput }),

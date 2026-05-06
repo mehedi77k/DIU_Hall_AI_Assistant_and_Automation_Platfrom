@@ -22,7 +22,7 @@ export default function NoticeBoardPage() {
   const [success, setSuccess] = useState('')
 
   const loadNotices = async () => {
-    const response = await fetch('http://127.0.0.1:18000/api/v1/notices')
+    const response = await fetch('http://localhost:8000/api/v1/notices')
     const data = await response.json()
     setItems(data)
   }
@@ -40,7 +40,7 @@ export default function NoticeBoardPage() {
     setError('')
     setSuccess('')
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/notices', {
+    const response = await fetch('http://localhost:8000/api/v1/notices', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

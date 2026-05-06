@@ -20,7 +20,7 @@ export default function ComplaintsPage() {
   const loadComplaints = async () => {
     setError('')
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/complaints', {
+    const response = await fetch('http://localhost:8000/api/v1/complaints', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -49,7 +49,7 @@ export default function ComplaintsPage() {
     setError('')
     setSuccess('')
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/complaints', {
+    const response = await fetch('http://localhost:8000/api/v1/complaints', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -75,7 +75,7 @@ export default function ComplaintsPage() {
     setSuccess('')
 
     const response = await fetch(
-      `http://127.0.0.1:18000/api/v1/complaints/${complaintId}/status`,
+      `http://localhost:8000/api/v1/complaints/${complaintId}/status`,
       {
         method: 'POST',
         headers: {

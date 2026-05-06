@@ -10,7 +10,7 @@ export default function ProfilePage() {
   const [success, setSuccess] = useState('')
 
   const loadCurrentUser = async () => {
-    const response = await fetch('http://127.0.0.1:18000/api/v1/auth/me', {
+    const response = await fetch('http://localhost:8000/api/v1/auth/me', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -41,7 +41,7 @@ export default function ProfilePage() {
     const formData = new FormData()
     formData.append('signature', selectedFile)
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/users/me/signature', {
+    const response = await fetch('http://localhost:8000/api/v1/users/me/signature', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -105,7 +105,7 @@ export default function ProfilePage() {
 
             {user?.signature_image_path ? (
               <img
-                src={`http://127.0.0.1:18000${user.signature_image_path}`}
+                src={`http://localhost:8000${user.signature_image_path}`}
                 alt="User signature"
                 style={{
                   maxWidth: '100%',

@@ -22,7 +22,7 @@ export default function GatePassPage() {
   const loadGatePasses = async () => {
     setError('')
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/gate-passes', {
+    const response = await fetch('http://localhost:8000/api/v1/gate-passes', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -52,7 +52,7 @@ export default function GatePassPage() {
     setError('')
     setSuccess('')
 
-    const response = await fetch('http://127.0.0.1:18000/api/v1/gate-passes', {
+    const response = await fetch('http://localhost:8000/api/v1/gate-passes', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -79,7 +79,7 @@ export default function GatePassPage() {
     setError('')
     setSuccess('')
 
-    const response = await fetch(`http://127.0.0.1:18000/api/v1/gate-passes/${gatePassId}/${action}`, {
+    const response = await fetch(`http://localhost:8000/api/v1/gate-passes/${gatePassId}/${action}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -221,7 +221,7 @@ export default function GatePassPage() {
 
                 {item.pdf_path && (
                   <a
-                    href={`http://127.0.0.1:18000${item.pdf_path}`}
+                    href={`http://localhost:8000${item.pdf_path}`}
                     target="_blank"
                     rel="noreferrer"
                     style={{ color: '#198754', fontWeight: 700 }}
