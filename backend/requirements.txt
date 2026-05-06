@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg[binary]
+pydantic-settings
+python-multipart
+pwdlib[argon2]
+python-jose[cryptography]
+email-validator
+reportlab
+chromadb==0.5.5
+sentence-transformers==2.7.0
+transformers==4.41.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1+cpu
