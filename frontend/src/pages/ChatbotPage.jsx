@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
-const CHAT_STORAGE_KEY = 'chatbotChats'
-const ACTIVE_CHAT_KEY = 'chatbotActiveChat'
+const API_BASE_URL = 'http://localhost:8000'
 const DEFAULT_CHAT_TITLE = 'New chat'
+
 const SUGGESTED_PROMPTS = [
   'Can visitors enter my room?',
   'What is the night out rule?',
@@ -12,12 +12,20 @@ const SUGGESTED_PROMPTS = [
   'What is rule 12?',
 ]
 
-const createChat = () => ({
-  id: `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+const getToken = () => sessionStorage.getItem('token') || localStorage.getItem('token')
+
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${getToken()}`,
+})
+
+const createDraftChat = () => ({
+  id: `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   title: DEFAULT_CHAT_TITLE,
   createdAt: Date.now(),
   updatedAt: Date.now(),
   messages: [],
+  messagesLoaded: true,
 })
 
 const buildChatTitle = (text) => {
@@ -26,63 +34,142 @@ const buildChatTitle = (text) => {
   return trimmed.length > 46 ? `${trimmed.slice(0, 46)}...` : trimmed
 }
 
+const toTime = (dateValue) => {
+  const parsed = Date.parse(dateValue)
+  return Number.isNaN(parsed) ? Date.now() : parsed
+}
+
+const normalizeSession = (session) => ({
+  id: session.id,
+  title: session.title || DEFAULT_CHAT_TITLE,
+  createdAt: toTime(session.created_at),
+  updatedAt: toTime(session.updated_at),
+  messages: [],
+  messagesLoaded: false,
+})
+
+const normalizeMessage = (message) => ({
+  id: `server-msg-${message.id}`,
+  role: message.role,
+  text: message.text,
+  matched_rules: message.matched_rules || [],
+})
+
+const isServerChatId = (id) => typeof id === 'number'
+
+function getErrorMessage(data, fallback) {
+  if (!data) return fallback
+
+  if (typeof data.detail === 'string') {
+    return data.detail
+  }
+
+  if (Array.isArray(data.detail)) {
+    return data.detail.map((item) => item.msg).join(', ')
+  }
+
+  return fallback
+}
+
 export default function ChatbotPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [error, setError] = useState('')
   const [chats, setChats] = useState([])
   const [activeChatId, setActiveChatId] = useState(null)
   const [editingChatId, setEditingChatId] = useState(null)
   const [editingTitle, setEditingTitle] = useState('')
 
-  useEffect(() => {
-    const stored = localStorage.getItem(CHAT_STORAGE_KEY)
-    const storedActive = localStorage.getItem(ACTIVE_CHAT_KEY)
-
-    if (!stored) {
-      const initialChat = createChat()
-      setChats([initialChat])
-      setActiveChatId(initialChat.id)
-      return
-    }
+  const loadMessages = async (sessionId) => {
+    if (!isServerChatId(sessionId)) return
 
     try {
-      const parsed = JSON.parse(stored)
-      if (Array.isArray(parsed) && parsed.every((chat) => Array.isArray(chat.messages))) {
-        setChats(parsed)
-        const activeExists = parsed.some((chat) => chat.id === storedActive)
-        setActiveChatId(activeExists ? storedActive : parsed[0]?.id || null)
-      } else {
-        const initialChat = createChat()
-        setChats([initialChat])
-        setActiveChatId(initialChat.id)
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/chat/sessions/${sessionId}/messages`,
+        {
+          method: 'GET',
+          headers: authHeaders(),
+        },
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to load chat messages'))
+        return
       }
-    } catch (error) {
-      console.error('Failed to parse chats', error)
-      const initialChat = createChat()
-      setChats([initialChat])
-      setActiveChatId(initialChat.id)
+
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === sessionId
+            ? {
+                ...chat,
+                messages: data.map(normalizeMessage),
+                messagesLoaded: true,
+              }
+            : chat,
+        ),
+      )
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
     }
+  }
+
+  const loadSessions = async () => {
+    setInitialLoading(true)
+    setError('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat/sessions`, {
+        method: 'GET',
+        headers: authHeaders(),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to load chat history'))
+        const draft = createDraftChat()
+        setChats([draft])
+        setActiveChatId(draft.id)
+        return
+      }
+
+      if (!Array.isArray(data) || data.length === 0) {
+        const draft = createDraftChat()
+        setChats([draft])
+        setActiveChatId(draft.id)
+        return
+      }
+
+      const normalized = data.map(normalizeSession)
+      setChats(normalized)
+      setActiveChatId(normalized[0].id)
+      await loadMessages(normalized[0].id)
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
+      const draft = createDraftChat()
+      setChats([draft])
+      setActiveChatId(draft.id)
+    } finally {
+      setInitialLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    if (chats.length > 0) {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats))
-    }
-  }, [chats])
-
-  useEffect(() => {
-    if (activeChatId) {
-      localStorage.setItem(ACTIVE_CHAT_KEY, activeChatId)
-    }
-  }, [activeChatId])
-
   const handleNewChat = () => {
-    const newChat = createChat()
+    const newChat = createDraftChat()
     setChats((prev) => [newChat, ...prev])
     setActiveChatId(newChat.id)
     setInput('')
     setLoading(false)
+    setError('')
   }
 
   const handleEditChat = (chat) => {
@@ -95,41 +182,116 @@ export default function ChatbotPage() {
     setEditingTitle('')
   }
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     const trimmed = editingTitle.trim()
-    if (!trimmed) {
+
+    if (!trimmed || editingChatId === null) {
       handleCancelEdit()
       return
     }
 
-    setChats((prev) =>
-      prev.map((chat) =>
-        chat.id === editingChatId ? { ...chat, title: trimmed } : chat,
-      ),
-    )
-    handleCancelEdit()
+    if (!isServerChatId(editingChatId)) {
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === editingChatId ? { ...chat, title: trimmed } : chat,
+        ),
+      )
+      handleCancelEdit()
+      return
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/chat/sessions/${editingChatId}`,
+        {
+          method: 'PATCH',
+          headers: authHeaders(),
+          body: JSON.stringify({ title: trimmed }),
+        },
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to rename chat'))
+        return
+      }
+
+      setChats((prev) =>
+        prev.map((chat) =>
+          chat.id === editingChatId
+            ? {
+                ...chat,
+                title: data.title,
+                updatedAt: toTime(data.updated_at),
+              }
+            : chat,
+        ),
+      )
+
+      handleCancelEdit()
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
+    }
   }
 
-  const handleDeleteChat = (id) => {
+  const removeChatFromState = (id) => {
     setChats((prev) => {
       const next = prev.filter((chat) => chat.id !== id)
+
       if (next.length === 0) {
-        const fresh = createChat()
+        const fresh = createDraftChat()
         setActiveChatId(fresh.id)
         return [fresh]
       }
 
       if (id === activeChatId) {
         setActiveChatId(next[0].id)
+
+        if (isServerChatId(next[0].id) && !next[0].messagesLoaded) {
+          loadMessages(next[0].id)
+        }
       }
 
       return next
     })
   }
 
-  const handleOpenChat = (id) => {
+  const handleDeleteChat = async (id) => {
+    if (!isServerChatId(id)) {
+      removeChatFromState(id)
+      return
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat/sessions/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to delete chat'))
+        return
+      }
+
+      removeChatFromState(id)
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
+    }
+  }
+
+  const handleOpenChat = async (id) => {
     setActiveChatId(id)
     setInput('')
+    setError('')
+
+    const chat = chats.find((item) => item.id === id)
+
+    if (isServerChatId(id) && chat && !chat.messagesLoaded) {
+      await loadMessages(id)
+    }
   }
 
   const activeChat = chats.find((chat) => chat.id === activeChatId)
@@ -140,6 +302,7 @@ export default function ChatbotPage() {
     .filter((chat) => {
       const query = searchTerm.trim().toLowerCase()
       if (!query) return true
+
       return (
         chat.title.toLowerCase().includes(query) ||
         chat.messages.some((message) => message.text.toLowerCase().includes(query))
@@ -150,9 +313,13 @@ export default function ChatbotPage() {
 
   const handleSend = async (overrideText) => {
     const messageText = (overrideText ?? input).trim()
+
     if (!messageText || loading || !activeChatId) return
 
+    const currentChatId = activeChatId
     const currentInput = messageText
+    const currentSessionId = isServerChatId(currentChatId) ? currentChatId : null
+
     const userMessage = {
       id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       role: 'user',
@@ -161,7 +328,7 @@ export default function ChatbotPage() {
 
     setChats((prev) =>
       prev.map((chat) => {
-        if (chat.id !== activeChatId) return chat
+        if (chat.id !== currentChatId) return chat
 
         const nextTitle =
           chat.title === DEFAULT_CHAT_TITLE ? buildChatTitle(currentInput) : chat.title
@@ -170,21 +337,31 @@ export default function ChatbotPage() {
           ...chat,
           title: nextTitle,
           updatedAt: Date.now(),
+          messagesLoaded: true,
           messages: [...chat.messages, userMessage],
         }
       }),
     )
+
     setInput('')
     setLoading(true)
+    setError('')
 
     try {
-      const response = await fetch('http://localhost:8000/api/v1/chat', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: currentInput }),
+        headers: authHeaders(),
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          message: currentInput,
+        }),
       })
 
       const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(getErrorMessage(data, 'Chatbot request failed. Please try again.'))
+      }
 
       const botMessage = {
         id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -194,27 +371,33 @@ export default function ChatbotPage() {
       }
 
       setChats((prev) =>
-        prev.map((chat) =>
-          chat.id === activeChatId
-            ? {
-                ...chat,
-                updatedAt: Date.now(),
-                messages: [...chat.messages, botMessage],
-              }
-            : chat,
-        ),
+        prev.map((chat) => {
+          if (chat.id !== currentChatId) return chat
+
+          return {
+            ...chat,
+            id: data.session_id || chat.id,
+            updatedAt: Date.now(),
+            messagesLoaded: true,
+            messages: [...chat.messages, botMessage],
+          }
+        }),
       )
-    } catch (error) {
+
+      if (!currentSessionId && data.session_id) {
+        setActiveChatId(data.session_id)
+      }
+    } catch (err) {
       const errorMessage = {
         id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
         role: 'assistant',
-        text: 'Chatbot request failed. Please try again.',
+        text: err.message || 'Chatbot request failed. Please try again.',
         matched_rules: [],
       }
 
       setChats((prev) =>
         prev.map((chat) =>
-          chat.id === activeChatId
+          chat.id === currentChatId
             ? {
                 ...chat,
                 updatedAt: Date.now(),
@@ -237,6 +420,8 @@ export default function ChatbotPage() {
         </p>
       </div>
 
+      {error && <div className="alert-error">{error}</div>}
+
       <div className="chat-layout-grid">
         <aside className="chat-sidebar">
           <button className="chat-new-button" onClick={handleNewChat}>
@@ -254,14 +439,19 @@ export default function ChatbotPage() {
 
           <div className="chat-recents">
             <div className="chat-recents-title">Recents</div>
+
             <div className="chat-recents-list">
-              {filteredChats.length === 0 ? (
+              {initialLoading ? (
+                <div className="chat-recents-empty">Loading chats...</div>
+              ) : filteredChats.length === 0 ? (
                 <div className="chat-recents-empty">No recent chats</div>
               ) : (
                 filteredChats.map((chat) => (
                   <div
                     key={chat.id}
-                    className={`chat-recent-item ${chat.id === activeChatId ? 'active' : ''}`}
+                    className={`chat-recent-item ${
+                      chat.id === activeChatId ? 'active' : ''
+                    }`}
                     onClick={() => handleOpenChat(chat.id)}
                   >
                     {editingChatId === chat.id ? (
@@ -271,6 +461,7 @@ export default function ChatbotPage() {
                           value={editingTitle}
                           onChange={(event) => setEditingTitle(event.target.value)}
                         />
+
                         <div className="chat-recent-actions">
                           <button
                             type="button"
@@ -282,6 +473,7 @@ export default function ChatbotPage() {
                           >
                             Save
                           </button>
+
                           <button
                             type="button"
                             className="chat-recent-button delete"
@@ -297,6 +489,7 @@ export default function ChatbotPage() {
                     ) : (
                       <>
                         <div className="chat-recent-title">{chat.title}</div>
+
                         <div className="chat-recent-actions">
                           <button
                             type="button"
@@ -308,6 +501,7 @@ export default function ChatbotPage() {
                           >
                             Edit
                           </button>
+
                           <button
                             type="button"
                             className="chat-recent-button delete"
@@ -331,12 +525,15 @@ export default function ChatbotPage() {
         <div className="chat-main">
           <div className="chat-shell">
             <div className="chat-messages">
-              {!hasUserMessages && (
+              {!hasUserMessages && !initialLoading && (
                 <div className="chat-empty-state">
                   <div className="chat-empty-title">Where should we begin?</div>
+
                   <div className="chat-empty-subtitle">
-                    Ask about visitors, night-outs, appliances, complaints, fines, or any rule number.
+                    Ask about visitors, night-outs, appliances, complaints, fines, or any
+                    rule number.
                   </div>
+
                   <div className="chat-suggested">
                     {SUGGESTED_PROMPTS.map((prompt) => (
                       <button
@@ -356,17 +553,22 @@ export default function ChatbotPage() {
                 <div key={message.id || index}>
                   {message.role === 'assistant' ? (
                     <div className="chat-response">
-                      <div className="chat-response-icon" aria-hidden="true">AI</div>
+                      <div className="chat-response-icon" aria-hidden="true">
+                        AI
+                      </div>
+
                       <div className="chat-response-body">
                         <div className="chat-response-text">{message.text}</div>
 
                         {message.matched_rules?.length > 0 && (
                           <div className="chat-response-sources">
                             <div className="chat-response-sources-title">Sources</div>
+
                             <ul>
                               {message.matched_rules.map((rule) => (
                                 <li key={rule.id}>
-                                  Rule {rule.rule_number} | {rule.section} | Page {rule.page}
+                                  Rule {rule.rule_number} | {rule.section} | Page{' '}
+                                  {rule.page}
                                 </li>
                               ))}
                             </ul>
@@ -384,7 +586,10 @@ export default function ChatbotPage() {
 
               {loading && (
                 <div className="chat-response">
-                  <div className="chat-response-icon" aria-hidden="true">AI</div>
+                  <div className="chat-response-icon" aria-hidden="true">
+                    AI
+                  </div>
+
                   <div className="chat-response-body">
                     <div className="chat-response-text">Searching hall rules...</div>
                   </div>
@@ -397,6 +602,7 @@ export default function ChatbotPage() {
                 type="text"
                 placeholder="Type your question..."
                 value={input}
+                disabled={initialLoading}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
@@ -404,7 +610,8 @@ export default function ChatbotPage() {
                   }
                 }}
               />
-              <button onClick={handleSend} disabled={loading}>
+
+              <button onClick={() => handleSend()} disabled={loading || initialLoading}>
                 {loading ? '...' : 'Send'}
               </button>
             </div>
@@ -414,6 +621,3 @@ export default function ChatbotPage() {
     </div>
   )
 }
-
-
-

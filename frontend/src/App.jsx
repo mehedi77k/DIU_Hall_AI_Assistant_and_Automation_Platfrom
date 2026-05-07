@@ -11,6 +11,16 @@ import ProfilePage from './pages/ProfilePage'
 import AdminRulesPage from './pages/AdminRulesPage'
 import NotificationBell from './components/NotificationBell'
 
+function getStoredUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('user') || localStorage.getItem('user') || 'null')
+  } catch {
+    sessionStorage.removeItem('user')
+    localStorage.removeItem('user')
+    return null
+  }
+}
+
 function ProtectedRoute({ user, children, allowedRoles = null }) {
   if (!user) {
     return <Navigate to="/login" replace />
@@ -26,7 +36,7 @@ function ProtectedRoute({ user, children, allowedRoles = null }) {
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
-  const user = JSON.parse(sessionStorage.getItem('user') || 'null')
+  const user = getStoredUser()
 
   const navItems = user
     ? [
@@ -50,6 +60,12 @@ export default function App() {
     sessionStorage.removeItem('user')
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+
+    // Remove old shared chatbot history keys.
+    // The updated ChatbotPage no longer uses these global keys,
+    // but this cleanup prevents old leaked history from staying in browser storage.
+    localStorage.removeItem('chatbotChats')
+    localStorage.removeItem('chatbotActiveChat')
 
     navigate('/login')
     window.location.reload()
@@ -189,4 +205,3 @@ export default function App() {
     </div>
   )
 }
-

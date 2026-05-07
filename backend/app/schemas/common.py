@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class GatePassCreate(BaseModel):
@@ -84,10 +84,6 @@ class ComplaintStatusUpdate(BaseModel):
     status: Literal["accepted", "rejected"]
 
 
-class ChatQuery(BaseModel):
-    message: str
-
-
 class MatchedRule(BaseModel):
     id: int | str
     rule_number: int
@@ -98,9 +94,42 @@ class MatchedRule(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ChatSendRequest(BaseModel):
+    message: str
+    session_id: int | None = None
+
+
+class ChatSessionCreate(BaseModel):
+    title: str = "New chat"
+
+
+class ChatRenameRequest(BaseModel):
+    title: str
+
+
+class ChatSessionResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    session_id: int
+    role: str
+    text: str
+    matched_rules: list[MatchedRule] = Field(default_factory=list)
+    created_at: datetime
+
+
 class ChatResponse(BaseModel):
+    session_id: int
     answer: str
-    matched_rules: list[MatchedRule] = []
+    matched_rules: list[MatchedRule] = Field(default_factory=list)
 
 
 class TestEmailRequest(BaseModel):

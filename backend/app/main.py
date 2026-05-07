@@ -1,3 +1,4 @@
+import json
 import shutil
 import textwrap
 from contextlib import asynccontextmanager
@@ -20,10 +21,23 @@ from app.core.security import create_access_token, hash_password, verify_passwor
 from app.db.base import Base
 from app.db.session import engine, get_db
 from app.db.seed_hall_rules import seed_hall_rules_from_json
-from app.models import Complaint, GatePass, HallRule, Notice, Notification, User
+from app.models import (
+    ChatMessage,
+    ChatSession,
+    Complaint,
+    GatePass,
+    HallRule,
+    Notice,
+    Notification,
+    User,
+)
 from app.schemas.common import (
-    ChatQuery,
+    ChatMessageResponse,
+    ChatRenameRequest,
     ChatResponse,
+    ChatSendRequest,
+    ChatSessionCreate,
+    ChatSessionResponse,
     ComplaintCreate,
     ComplaintResponse,
     ComplaintStatusUpdate,
@@ -77,6 +91,24 @@ def wrap_lines(text: str, width: int = 80) -> list[str]:
 
     lines = textwrap.wrap(text, width=width)
     return lines if lines else ["-"]
+
+
+def build_chat_title(text: str) -> str:
+    title = text.strip()
+    if not title:
+        return "New chat"
+    return title[:46] + "..." if len(title) > 46 else title
+
+
+def parse_matched_rules(raw_value: str | None) -> list[dict]:
+    if not raw_value:
+        return []
+
+    try:
+        parsed = json.loads(raw_value)
+        return parsed if isinstance(parsed, list) else []
+    except json.JSONDecodeError:
+        return []
 
 
 def draw_signature_box(
@@ -916,14 +948,188 @@ def rebuild_hall_rule_index(
     }
 
 
-@app.post("/api/v1/chat", response_model=ChatResponse)
-def chatbot_reply(
-    payload: ChatQuery,
+@app.get("/api/v1/chat/sessions", response_model=list[ChatSessionResponse])
+def list_my_chat_sessions(
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    result = answer_question(db, payload.message)
+    return (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == current_user.id)
+        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
+        .all()
+    )
+
+
+@app.post("/api/v1/chat/sessions", response_model=ChatSessionResponse)
+def create_chat_session(
+    payload: ChatSessionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    title = build_chat_title(payload.title)
+
+    session = ChatSession(
+        user_id=current_user.id,
+        title=title,
+        updated_at=datetime.utcnow(),
+    )
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    return session
+
+
+@app.patch("/api/v1/chat/sessions/{session_id}", response_model=ChatSessionResponse)
+def rename_chat_session(
+    session_id: int,
+    payload: ChatRenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    session.title = build_chat_title(payload.title)
+    session.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(session)
+
+    return session
+
+
+@app.delete("/api/v1/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    db.delete(session)
+    db.commit()
+
+    return {"message": "Chat session deleted successfully"}
+
+
+@app.get(
+    "/api/v1/chat/sessions/{session_id}/messages",
+    response_model=list[ChatMessageResponse],
+)
+def list_chat_messages(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+        .all()
+    )
+
+    return [
+        ChatMessageResponse(
+            id=message.id,
+            session_id=message.session_id,
+            role=message.role,
+            text=message.text,
+            matched_rules=parse_matched_rules(message.matched_rules_json),
+            created_at=message.created_at,
+        )
+        for message in messages
+    ]
+
+
+@app.post("/api/v1/chat", response_model=ChatResponse)
+def chatbot_reply(
+    payload: ChatSendRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    message_text = payload.message.strip()
+
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    session = None
+
+    if payload.session_id is not None:
+        session = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == payload.session_id)
+            .filter(ChatSession.user_id == current_user.id)
+            .first()
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+    if session is None:
+        session = ChatSession(
+            user_id=current_user.id,
+            title=build_chat_title(message_text),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+    if session.title == "New chat":
+        session.title = build_chat_title(message_text)
+
+    user_message = ChatMessage(
+        session_id=session.id,
+        role="user",
+        text=message_text,
+    )
+    db.add(user_message)
+
+    result = answer_question(db, message_text)
+    matched_rules = result.get("matched_rules", [])
+
+    assistant_message = ChatMessage(
+        session_id=session.id,
+        role="assistant",
+        text=result["answer"],
+        matched_rules_json=json.dumps(matched_rules),
+    )
+    db.add(assistant_message)
+
+    session.updated_at = datetime.utcnow()
+
+    db.commit()
 
     return ChatResponse(
+        session_id=session.id,
         answer=result["answer"],
-        matched_rules=result.get("matched_rules", []),
+        matched_rules=matched_rules,
     )

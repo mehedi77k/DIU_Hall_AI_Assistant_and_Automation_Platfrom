@@ -1,3 +1,4 @@
+from app.models.chat import ChatMessage, ChatSession
 from app.models.complaint import Complaint
 from app.models.gate_pass import GatePass
 from app.models.hall_rule import HallRule
@@ -12,4 +13,6 @@ __all__ = [
     "Complaint",
     "HallRule",
     "Notification",
+    "ChatSession",
+    "ChatMessage",
 ]
