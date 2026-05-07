@@ -69,7 +69,6 @@ STUDENT_SIGNATURE_DIR = UPLOADS_DIR / "signatures" / "students"
 GATE_PASS_PDF_DIR = UPLOADS_DIR / "gate_pass_pdfs"
 
 ASSET_SIGNATURE_DIR = BASE_DIR / "assets" / "signatures"
-ADMIN_SIGNATURE_PATH = ASSET_SIGNATURE_DIR / "admin_signature.png"
 CHECKER_SIGNATURE_PATH = ASSET_SIGNATURE_DIR / "checker_signature.png"
 
 
@@ -83,6 +82,20 @@ def public_path_to_file(public_path: str | None) -> Path | None:
     if not public_path:
         return None
     return BASE_DIR / public_path.lstrip("/")
+
+
+def get_user_signature_file(user: User) -> Path | None:
+    return public_path_to_file(user.signature_image_path)
+
+
+def require_user_signature(user: User, message: str):
+    signature_file = get_user_signature_file(user)
+
+    if not user.signature_image_path or not signature_file or not signature_file.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=message,
+        )
 
 
 def wrap_lines(text: str, width: int = 80) -> list[str]:
@@ -149,7 +162,7 @@ def draw_signature_box(
 def generate_gate_pass_pdf(
     gate_pass: GatePass,
     student: User,
-    approved_admin_name: str,
+    approved_admin: User,
 ) -> str:
     ensure_directories()
 
@@ -278,7 +291,7 @@ def generate_gate_pass_pdf(
 
     approval_fields = [
         ("Status: ", gate_pass.status.upper()),
-        ("Approved By: ", approved_admin_name),
+        ("Approved By: ", approved_admin.full_name),
     ]
 
     for label, value in approval_fields:
@@ -290,6 +303,7 @@ def generate_gate_pass_pdf(
         y -= 16
 
     student_signature_file = public_path_to_file(student.signature_image_path)
+    admin_signature_file = public_path_to_file(approved_admin.signature_image_path)
 
     gap = 6 * mm
     box_height = 22 * mm
@@ -321,8 +335,8 @@ def generate_gate_pass_pdf(
         box_width,
         box_height,
         "Approved By",
-        ADMIN_SIGNATURE_PATH,
-        "Admin signature",
+        admin_signature_file,
+        "Admin signature not uploaded",
     )
 
     draw_signature_box(
@@ -504,6 +518,11 @@ def create_gate_pass(
             detail="Only students can submit gate pass requests",
         )
 
+    require_user_signature(
+        current_user,
+        "Please upload your signature before submitting a gate pass request.",
+    )
+
     gate_pass = GatePass(
         student_name=current_user.full_name,
         student_id=current_user.student_id,
@@ -541,18 +560,22 @@ def approve_gate_pass(
             detail="Student account not found for this gate pass",
         )
 
-    if not student.signature_image_path:
-        raise HTTPException(
-            status_code=400,
-            detail="Student signature not uploaded yet",
-        )
+    require_user_signature(
+        student,
+        "Student signature not uploaded yet",
+    )
+
+    require_user_signature(
+        current_user,
+        "Admin signature not uploaded yet. Please upload your signature before approving gate passes.",
+    )
 
     gate_pass.status = "approved"
     gate_pass.approved_by = current_user.full_name
     gate_pass.pdf_path = generate_gate_pass_pdf(
         gate_pass,
         student,
-        current_user.full_name,
+        current_user,
     )
 
     notify_user(
@@ -577,6 +600,11 @@ def reject_gate_pass(
     current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    require_user_signature(
+        current_user,
+        "Admin signature not uploaded yet. Please upload your signature before rejecting gate passes.",
+    )
+
     gate_pass = db.query(GatePass).filter(GatePass.id == gate_pass_id).first()
     if not gate_pass:
         raise HTTPException(status_code=404, detail="Gate pass not found")
