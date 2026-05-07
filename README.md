@@ -16,37 +16,170 @@ A full-stack hall management and automation platform for DIU hall operations, bu
 
 ## Overview
 
-**DIU Hall AI Assistant & Automation Platform** is a web-based system designed to simplify and automate common student hall-management workflows.
+**DIU Hall AI Assistant & Automation Platform** is a web-based system designed to simplify and automate student hall-management workflows.
 
-The system allows students to register, log in, manage their profile, upload a signature, submit gate-pass requests, view notices, submit complaints, receive notifications, and ask hall-rule-related questions through an AI assistant.
+The system allows students to register, log in, manage their profile, upload a signature, submit gate-pass requests, view notices, submit complaints, receive in-app and email notifications, and ask hall-rule-related questions through an AI assistant.
 
-Administrators can review and approve or reject gate-pass requests, generate gate-pass PDFs, publish notices, manage complaints, update complaint status, manage hall rules, and rebuild the vector index used by the chatbot.
+Administrators can review and approve or reject gate-pass requests, generate gate-pass PDFs, publish notices, manage complaints, update complaint status, manage hall rules, rebuild the chatbot vector index, and trigger notification workflows for important hall updates.
 
 The project uses a **React + Vite frontend**, a **FastAPI backend**, a **PostgreSQL database**, and a **ChromaDB vector store** powered by **Sentence Transformers** for semantic hall-rule retrieval.
 
 ---
 
+## Latest Updates
+
+This version includes several important new features and security/UX improvements:
+
+- User-specific chatbot history stored in the database
+- Chatbot history isolation by logged-in user
+- Fresh new chat screen every time the chatbot page is opened
+- Previous chats shown under recent chats
+- Persistent chat sessions and chat messages
+- Chat session rename and delete support
+- Student signature required before submitting a gate-pass request
+- Admin signature required before approving or rejecting gate-pass requests
+- Dynamic admin signature in generated gate-pass PDFs
+- Gate-pass PDF uses the approving admin's uploaded profile signature
+- Professional notification email templates
+- Gate-pass approval email includes PDF download link
+- Notification deep-link support
+- Bell notification click redirects to the related page
+- New hall-rule email notification to all active admins and students
+- Notice notifications include in-app notification and optional email
+- Complaint status notifications include in-app notification and optional email
+- Docker backend healthcheck support
+- Frontend waits for backend health before startup
+- HuggingFace and Torch cache volumes for faster backend startup
+
+---
+
 ## Key Features
 
-- Student and admin authentication
-- JWT-based protected API access
-- Role-based frontend route protection
-- Student profile management
-- Student signature upload
-- Gate-pass request submission
-- Admin gate-pass approval and rejection
-- Automated gate-pass PDF generation
-- Notice board for hall announcements
-- In-app notification system
-- Optional SMTP email notification support
+### Authentication and Authorization
+
+- Student and admin registration
+- Student and admin login
+- JWT-based authentication
+- Protected backend API routes
+- Role-based route protection in frontend
+- Admin-only rule management
+- Admin-only gate-pass approval/rejection
+- Admin-only notice publishing
+- Admin-only complaint status update
+
+### Profile and Signature
+
+- User profile page
+- Signature image upload
+- Supports `.png`, `.jpg`, `.jpeg`
+- Signature stored under backend uploads
+- Student signature is mandatory before gate-pass submission
+- Admin signature is mandatory before gate-pass approval or rejection
+- Admin's own uploaded signature appears in the generated gate-pass PDF
+
+### Gate-Pass System
+
+- Student gate-pass request submission
+- Student can view only their own gate-pass requests
+- Admin can view all gate-pass requests
+- Admin can approve gate-pass requests
+- Admin can reject gate-pass requests
+- Automated gate-pass PDF generation using ReportLab
+- PDF includes:
+  - Gate-pass number
+  - Student information
+  - Leave and return dates
+  - Guardian phone
+  - Reason
+  - Item/details
+  - Approval information
+  - Student signature
+  - Approving admin signature
+  - Checker signature
+- Gate-pass approval notification
+- Gate-pass rejection notification
+- Gate-pass approval email includes PDF link
+
+### Notice Board
+
+- Admin can publish notices
+- Students can view notices
+- Notice can include deadline
+- Notice creation triggers notifications to active students
+- Notice email template includes notice title, content, and notice-board link
+
+### Complaint Management
+
 - Student complaint submission
-- Admin complaint status management
-- AI assistant for hall-rule questions
-- Hall-rule semantic search using vector embeddings
-- Admin hall-rule create, update, delete, and rebuild workflow
-- PostgreSQL-backed persistent data storage
-- Docker-based development setup
-- React dashboard with separate student and admin workflows
+- Student can view own complaints
+- Admin can view all complaints
+- Admin can update complaint status
+- Supported status values:
+  - `accepted`
+  - `rejected`
+- Complaint status update triggers in-app and email notifications
+
+### Notification System
+
+- In-app notification bell
+- Unread notification badge
+- Notification list dropdown
+- Mark one notification as read
+- Mark all notifications as read
+- Notification categories:
+  - `gate_pass`
+  - `notice`
+  - `complaint`
+  - `hall_rule`
+- Notification deep-link support
+- Notification click can redirect to:
+  - Gate-pass page
+  - Notice board
+  - Complaint page
+  - Chatbot page
+- Optional SMTP email notification support
+- Professional email templates
+- Background email sending through FastAPI `BackgroundTasks`
+
+### Hall Rule Management
+
+- Admin can create hall rules
+- Admin can update hall rules
+- Admin can delete hall rules
+- Admin can rebuild vector index
+- Duplicate active rule number validation
+- Inactive rule can be restored by adding the same rule number
+- Rule updates sync with ChromaDB vector index
+- Rule deletion removes rule from vector index
+- New rule creation sends notifications to all active admins and students
+
+### AI Hall-Rules Chatbot
+
+- Hall-rule question answering
+- Exact rule-number lookup
+- Semantic rule retrieval
+- Uses Sentence Transformers for embeddings
+- Uses ChromaDB for vector search
+- Returns matched rule sources
+- Authenticated chatbot API
+- User-specific chat history
+- Database-backed chat sessions
+- Database-backed chat messages
+- Previous chats remain under recent chats
+- Opening chatbot page starts from a fresh new chat screen
+- Admin and student chat histories are separated by account
+
+### Docker and Startup Reliability
+
+- Docker Compose based setup
+- PostgreSQL healthcheck
+- Backend healthcheck
+- Frontend waits for backend to become healthy
+- Backend runs without `--reload` in Docker for better startup stability
+- HuggingFace cache volume
+- Torch cache volume
+- Persistent uploads volume
+- PostgreSQL data volume
 
 ---
 
@@ -63,7 +196,8 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 │  │ - Upload signature  │        │ - Manage complaints │             │
 │  │ - Request gate pass │        │ - Approve passes    │             │
 │  │ - Submit complaint  │        │ - Manage rules      │             │
-│  │ - Ask chatbot       │        │ - Rebuild index     │             │
+│  │ - Receive alerts    │        │ - Rebuild index     │             │
+│  │ - Ask chatbot       │        │ - Receive alerts    │             │
 │  └──────────┬──────────┘        └──────────┬──────────┘             │
 └─────────────┼──────────────────────────────┼────────────────────────┘
               │                              │
@@ -84,12 +218,18 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 │  - Chatbot                                                          │
 │  - Admin Rule Management                                            │
 │                                                                     │
+│  Components:                                                        │
+│  - Notification Bell                                                │
+│  - Role-based Sidebar                                               │
+│  - Protected Routes                                                 │
+│                                                                     │
 │  Responsibilities:                                                  │
 │  - User interface                                                   │
 │  - Token storage                                                    │
-│  - Protected routes                                                 │
 │  - Role-based navigation                                            │
 │  - API communication                                                │
+│  - Notification display                                             │
+│  - Chat history UI                                                  │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 │ REST API over HTTP
@@ -109,6 +249,7 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 │  - Notification management                                          │
 │  - Complaint management                                             │
 │  - Hall-rule management                                             │
+│  - Chat session management                                          │
 │  - AI chatbot API                                                   │
 │                                                                     │
 │  Backend Services:                                                  │
@@ -118,6 +259,7 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 │  - SMTP email notification                                          │
 │  - Static file serving                                              │
 │  - PDF generation using ReportLab                                   │
+│  - ChromaDB vector indexing                                         │
 └───────────────┬───────────────────────────────┬─────────────────────┘
                 │                               │
                 │ SQLAlchemy ORM                │ File Storage
@@ -125,15 +267,17 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 ┌──────────────────────────────┐     ┌───────────────────────────────┐
 │        Database Layer         │     │       Uploads / Assets         │
 │                              │     │                               │
-│        PostgreSQL             │     │ - Student signatures           │
+│        PostgreSQL             │     │ - User signatures              │
 │                              │     │ - Generated gate-pass PDFs      │
-│  Tables:                      │     │ - Admin/checker signatures     │
+│  Tables:                      │     │ - Checker signature asset       │
 │  - users                      │     │                               │
 │  - gate_passes                │     └───────────────────────────────┘
 │  - notices                    │
 │  - complaints                 │
 │  - notifications              │
 │  - hall_rules                 │
+│  - chat_sessions              │
+│  - chat_messages              │
 └───────────────┬──────────────┘
                 │
                 │ Hall rules are seeded and indexed
@@ -172,16 +316,23 @@ Student
   ├── Register / Login
   │
   ├── Upload Signature
+  │       └── Required before gate-pass submission
   │
   ├── Submit Gate-Pass Request
   │       │
-  │       └── Wait for Admin Approval
+  │       └── Wait for Admin Approval or Rejection
+  │
+  ├── Receive Gate-Pass Notification
+  │       ├── In-app notification
+  │       └── Optional email notification
   │
   ├── View Notices
   │
   ├── Submit Complaint
   │
-  ├── Receive Notifications
+  ├── Receive Complaint Status Notification
+  │
+  ├── Receive New Rule Notification
   │
   └── Ask Hall-Rule Questions through Chatbot
 ```
@@ -193,22 +344,30 @@ Admin
   │
   ├── Login
   │
+  ├── Upload Signature
+  │       └── Required before gate-pass approval/rejection
+  │
   ├── View All Gate-Pass Requests
   │       │
   │       ├── Approve Request
-  │       │       └── Generate Gate-Pass PDF
+  │       │       ├── Generate Gate-Pass PDF
+  │       │       ├── Add Admin Signature to PDF
+  │       │       └── Notify Student
   │       │
   │       └── Reject Request
+  │               └── Notify Student
   │
   ├── Publish Notices
   │       └── Notify Students
   │
   ├── View Complaints
   │       └── Update Complaint Status
+  │               └── Notify Student
   │
   ├── Manage Hall Rules
   │       │
   │       ├── Create Rule
+  │       │       └── Notify All Active Admins and Students
   │       ├── Update Rule
   │       ├── Delete Rule
   │       └── Rebuild Vector Index
@@ -216,36 +375,41 @@ Admin
   └── Test Email Notification in Development
 ```
 
-### Chatbot / AI Workflow
+### Chatbot Workflow
 
 ```text
-User Question
+User Opens Chatbot Page
    │
-   ▼
-FastAPI Chat Endpoint
+   ├── Fresh empty chat screen is shown
    │
-   ▼
-Question Preprocessing
+   ├── Previous chats are listed under Recents
    │
-   ├── Exact rule-number lookup
-   │       Example: "What is rule 5?"
-   │
-   └── Semantic search
+   └── User asks a question
            │
            ▼
-Sentence Transformer Embedding
+     Authenticated Chat API
            │
            ▼
-ChromaDB Vector Search
+     Create or use Chat Session
            │
            ▼
-Top Matching Hall Rules
+     Save User Message
            │
            ▼
-Formatted Answer + Matched Rules
+     Retrieve Matching Hall Rules
+           │
+           ├── Exact Rule Lookup
+           │
+           └── Semantic Vector Search
            │
            ▼
-React Chatbot Interface
+     Generate Answer
+           │
+           ▼
+     Save Assistant Message
+           │
+           ▼
+     Return Answer + Matched Rules
 ```
 
 ---
@@ -292,6 +456,7 @@ DIU-Hall-AI-Assistant
 │   │   │   └── session.py
 │   │   │
 │   │   ├── models
+│   │   │   ├── chat.py
 │   │   │   ├── complaint.py
 │   │   │   ├── gate_pass.py
 │   │   │   ├── hall_rule.py
@@ -318,6 +483,8 @@ DIU-Hall-AI-Assistant
 ├── frontend
 │   ├── src
 │   │   ├── components
+│   │   │   └── NotificationBell.jsx
+│   │   │
 │   │   ├── pages
 │   │   │   ├── AdminRulesPage.jsx
 │   │   │   ├── ChatbotPage.jsx
@@ -413,7 +580,7 @@ Stores student complaints.
 
 ### `notifications`
 
-Stores in-app notifications.
+Stores in-app notifications and deep-link metadata.
 
 | Field | Description |
 |---|---|
@@ -423,6 +590,9 @@ Stores in-app notifications.
 | `message` | Notification message |
 | `category` | Notification category |
 | `is_read` | Read/unread status |
+| `entity_type` | Related entity type, such as `gate_pass`, `notice`, `complaint`, or `hall_rule` |
+| `entity_id` | Related entity ID |
+| `action_url` | Frontend path to open when notification is clicked |
 | `created_at` | Notification creation time |
 
 ### `hall_rules`
@@ -439,6 +609,31 @@ Stores hall rules used by the chatbot.
 | `is_active` | Active/inactive status |
 | `created_at` | Creation time |
 | `updated_at` | Last update time |
+
+### `chat_sessions`
+
+Stores chatbot sessions for each authenticated user.
+
+| Field | Description |
+|---|---|
+| `id` | Primary key |
+| `user_id` | Chat owner |
+| `title` | Chat session title |
+| `created_at` | Session creation time |
+| `updated_at` | Last activity time |
+
+### `chat_messages`
+
+Stores chatbot messages.
+
+| Field | Description |
+|---|---|
+| `id` | Primary key |
+| `session_id` | Related chat session |
+| `role` | `user` or `assistant` |
+| `text` | Message text |
+| `matched_rules_json` | Matched rule metadata for assistant responses |
+| `created_at` | Message creation time |
 
 ---
 
@@ -469,20 +664,33 @@ cd DIU-Hall-AI-Assistant
 Create a `.env` file in the project root.
 
 ```env
-EMAIL_NOTIFICATIONS_ENABLED=false
+DATABASE_URL=postgresql+psycopg://diu_user:diu_password@db:5432/diu_hall
 
+APP_NAME=DIU Hall AI Assistant and Automation Platform
+APP_ENV=development
+
+BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+
+EMAIL_NOTIFICATIONS_ENABLED=true
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_FROM_EMAIL=
+SMTP_USERNAME=your_sender_email@gmail.com
+SMTP_PASSWORD=your_16_character_app_password_without_spaces
+SMTP_FROM_EMAIL=your_sender_email@gmail.com
 SMTP_USE_TLS=true
+
+PUBLIC_BACKEND_URL=http://localhost:8000
+PUBLIC_FRONTEND_URL=http://localhost:5173
+
+BACKEND_PORT=8000
+FRONTEND_PORT=5173
+DB_PORT=55432
 ```
 
-For email notifications, update the SMTP values and set:
+If you do not want email notifications during development:
 
 ```env
-EMAIL_NOTIFICATIONS_ENABLED=true
+EMAIL_NOTIFICATIONS_ENABLED=false
 ```
 
 ### 3. Start the Application
@@ -529,6 +737,54 @@ Port: 55432
 
 ---
 
+## Docker Compose Notes
+
+The recommended Docker setup includes:
+
+- PostgreSQL healthcheck
+- Backend healthcheck
+- Frontend waits for backend health
+- No backend `--reload` in Docker command
+- Persistent PostgreSQL volume
+- Persistent uploads volume
+- HuggingFace cache volume
+- Torch cache volume
+
+Recommended backend command:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Recommended backend healthcheck:
+
+```yaml
+healthcheck:
+  test:
+    [
+      "CMD",
+      "python",
+      "-c",
+      "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"
+    ]
+  interval: 10s
+  timeout: 5s
+  retries: 30
+  start_period: 90s
+```
+
+Recommended frontend dependency:
+
+```yaml
+depends_on:
+  backend:
+    condition: service_healthy
+```
+
+This prevents the frontend from starting before the backend is fully ready.
+
+---
+
 ## Running the Project Manually
 
 Use this method if you do not want to use Docker.
@@ -552,7 +808,7 @@ GRANT ALL PRIVILEGES ON DATABASE diu_hall TO diu_user;
 
 ### 3. Configure Backend Environment
 
-Create a `.env` file inside the `backend` folder or project root depending on how you run the backend.
+Create a `.env` file inside the project root or backend folder depending on how you run the backend.
 
 ```env
 APP_NAME=DIU Hall AI Assistant and Automation Platform
@@ -567,6 +823,9 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_FROM_EMAIL=
 SMTP_USE_TLS=true
+
+PUBLIC_BACKEND_URL=http://localhost:8000
+PUBLIC_FRONTEND_URL=http://localhost:5173
 
 ANONYMIZED_TELEMETRY=False
 ```
@@ -641,15 +900,85 @@ http://localhost:5173
 | `APP_NAME` | Backend application name | `DIU Hall AI Assistant and Automation Platform` |
 | `APP_ENV` | Runtime environment | `development` |
 | `DATABASE_URL` | SQLAlchemy database connection URL | `postgresql+psycopg://diu_user:diu_password@db:5432/diu_hall` |
-| `BACKEND_CORS_ORIGINS` | Allowed frontend origins | `["http://localhost:5173"]` |
-| `EMAIL_NOTIFICATIONS_ENABLED` | Enable or disable SMTP emails | `false` |
+| `BACKEND_CORS_ORIGINS` | Allowed frontend origins | `["http://localhost:5173","http://127.0.0.1:5173"]` |
+| `EMAIL_NOTIFICATIONS_ENABLED` | Enable or disable SMTP emails | `true` |
 | `SMTP_HOST` | SMTP server host | `smtp.gmail.com` |
 | `SMTP_PORT` | SMTP server port | `587` |
 | `SMTP_USERNAME` | SMTP username | `example@gmail.com` |
-| `SMTP_PASSWORD` | SMTP password or app password | `your_app_password` |
+| `SMTP_PASSWORD` | SMTP app password | `your_app_password` |
 | `SMTP_FROM_EMAIL` | Sender email address | `example@gmail.com` |
 | `SMTP_USE_TLS` | Enable TLS for SMTP | `true` |
+| `PUBLIC_BACKEND_URL` | Public backend URL used in email links | `http://localhost:8000` |
+| `PUBLIC_FRONTEND_URL` | Public frontend URL used in email links | `http://localhost:5173` |
+| `BACKEND_PORT` | Backend host port | `8000` |
+| `FRONTEND_PORT` | Frontend host port | `5173` |
+| `DB_PORT` | PostgreSQL host port | `55432` |
 | `ANONYMIZED_TELEMETRY` | Disable Chroma telemetry | `False` |
+
+---
+
+## Email Notification Setup
+
+The platform can send email notifications for:
+
+- Gate-pass approval
+- Gate-pass rejection
+- Notice publishing
+- Complaint status update
+- New hall-rule creation
+- Development email test
+
+### Gmail SMTP Setup
+
+If Gmail is used as the SMTP sender:
+
+1. Use a dedicated sender Gmail account.
+2. Enable 2-Step Verification.
+3. Generate a Gmail App Password.
+4. Put the 16-character app password in `.env` without spaces.
+5. Set `SMTP_USERNAME` and `SMTP_FROM_EMAIL` to the same Gmail address.
+
+Example:
+
+```env
+EMAIL_NOTIFICATIONS_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=diuhallassistant@gmail.com
+SMTP_PASSWORD=abcdefghijklmnop
+SMTP_FROM_EMAIL=diuhallassistant@gmail.com
+SMTP_USE_TLS=true
+```
+
+Do not use a normal Gmail password.
+
+### Email Testing
+
+Admin can test email using:
+
+```text
+POST /api/v1/dev/test-email
+```
+
+Example request:
+
+```json
+{
+  "to_email": "student@example.com"
+}
+```
+
+Check email logs:
+
+```bash
+docker compose logs backend --tail=200
+```
+
+Search only email logs in PowerShell:
+
+```powershell
+docker compose logs backend --tail=200 | Select-String "Email"
+```
 
 ---
 
@@ -733,20 +1062,27 @@ rejected
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
+| `GET` | `/api/v1/chat/sessions` | Authenticated | List current user's chat sessions |
+| `POST` | `/api/v1/chat/sessions` | Authenticated | Create a chat session |
+| `PATCH` | `/api/v1/chat/sessions/{session_id}` | Authenticated | Rename a chat session |
+| `DELETE` | `/api/v1/chat/sessions/{session_id}` | Authenticated | Delete a chat session |
+| `GET` | `/api/v1/chat/sessions/{session_id}/messages` | Authenticated | List messages in a chat session |
 | `POST` | `/api/v1/chat` | Authenticated | Ask hall-rule-related questions |
 
 Example request:
 
 ```json
 {
+  "session_id": 1,
   "message": "What is rule 5?"
 }
 ```
 
-Example response format:
+Example response:
 
 ```json
 {
+  "session_id": 1,
   "answer": "According to Rule 5 under ...",
   "matched_rules": [
     {
@@ -765,9 +1101,9 @@ Example response format:
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
 | `GET` | `/api/v1/admin/rules` | Admin | List hall rules |
-| `POST` | `/api/v1/admin/rules` | Admin | Create hall rule |
+| `POST` | `/api/v1/admin/rules` | Admin | Create hall rule and notify all active admins/students |
 | `PUT` | `/api/v1/admin/rules/{rule_id}` | Admin | Update hall rule |
-| `DELETE` | `/api/v1/admin/rules/{rule_id}` | Admin | Delete or deactivate hall rule |
+| `DELETE` | `/api/v1/admin/rules/{rule_id}` | Admin | Delete hall rule |
 | `POST` | `/api/v1/admin/rules/rebuild-index` | Admin | Rebuild ChromaDB vector index |
 
 ### Development Email Test
@@ -817,7 +1153,31 @@ Authorization: Bearer jwt_token_here
 | Role | Capabilities |
 |---|---|
 | `student` | Submit gate passes, submit complaints, view notices, use chatbot, receive notifications |
-| `admin` | Manage gate passes, notices, complaints, hall rules, and test email notifications |
+| `admin` | Manage gate passes, notices, complaints, hall rules, test email notifications, and receive admin notifications |
+
+---
+
+## Signature Policy
+
+### Student Signature
+
+A student must upload a signature before submitting a gate-pass request.
+
+If a student tries to submit a gate pass without a signature, the API returns an error.
+
+### Admin Signature
+
+An admin must upload a signature before approving or rejecting a gate-pass request.
+
+If an admin tries to approve or reject without a signature, the API returns an error.
+
+### PDF Signature Behavior
+
+When a gate pass is approved:
+
+- The student signature is taken from the student's uploaded profile signature.
+- The admin signature is taken from the approving admin's uploaded profile signature.
+- The checker signature is taken from the configured checker signature asset.
 
 ---
 
@@ -838,7 +1198,7 @@ The generated PDF includes:
 - Item/details section
 - Approval information
 - Student signature
-- Admin signature
+- Approving admin signature
 - Checker signature
 
 Generated PDFs are stored under:
@@ -847,11 +1207,115 @@ Generated PDFs are stored under:
 backend/uploads/gate_pass_pdfs
 ```
 
-Student signatures are stored under:
+User signatures are stored under:
 
 ```text
 backend/uploads/signatures/students
 ```
+
+---
+
+## Notification Behavior
+
+### Gate-Pass Approved
+
+Receiver:
+
+```text
+The student who submitted the gate-pass request
+```
+
+In-app notification:
+
+```text
+Gate pass GP-0001 has been approved.
+```
+
+Email subject:
+
+```text
+Gate Pass Approved - GP-0001
+```
+
+Email contains:
+
+- Student name
+- Gate-pass ID
+- Student ID
+- Room number
+- Leave date
+- Return date
+- Approving admin name
+- Approval time
+- PDF download link
+- Gate-pass page link
+
+### Gate-Pass Rejected
+
+Receiver:
+
+```text
+The student who submitted the gate-pass request
+```
+
+Email subject:
+
+```text
+Gate Pass Rejected - GP-0001
+```
+
+### Notice Created
+
+Receiver:
+
+```text
+All active students
+```
+
+Email subject:
+
+```text
+New Hall Notice - Notice Title
+```
+
+### Complaint Status Updated
+
+Receiver:
+
+```text
+The student who submitted the complaint
+```
+
+Email subject:
+
+```text
+Complaint Status Updated - #1
+```
+
+### New Hall Rule Added
+
+Receiver:
+
+```text
+All active students and admins
+```
+
+Email subject:
+
+```text
+New Hall Rule Added - Rule 12
+```
+
+Email contains:
+
+- Rule number
+- Section
+- Page number
+- Admin who added the rule
+- Added time
+- Rule text
+- Chatbot link
+- Admin rule-management link for admin receivers
 
 ---
 
@@ -913,6 +1377,21 @@ Can I leave the hall at night?
 
 The system retrieves the most semantically relevant hall rules and returns a formatted answer with matched rules.
 
+### 3. User-Specific Chat History
+
+Each user has separate chatbot history.
+
+Behavior:
+
+- Student A cannot see Student B's chats.
+- Admin cannot see Student chats.
+- Student cannot see Admin chats.
+- Chat sessions are filtered by `current_user.id`.
+- Messages are stored in `chat_messages`.
+- Sessions are stored in `chat_sessions`.
+- A fresh empty chat opens when visiting the chatbot page.
+- Old chats are shown under Recents.
+
 ---
 
 ## Frontend Pages
@@ -926,7 +1405,7 @@ The system retrieves the most semantically relevant hall rules and returns a for
 | Gate Pass | Submit and manage gate-pass requests |
 | Notice Board | View hall notices |
 | Complaints | Submit and track complaints |
-| Chatbot | Ask hall-rule questions |
+| Chatbot | Ask hall-rule questions and view recent chats |
 | Admin Rules | Admin-only hall-rule management |
 
 ---
@@ -977,6 +1456,12 @@ View frontend logs only:
 docker compose logs -f frontend
 ```
 
+Check service status:
+
+```bash
+docker compose ps
+```
+
 ---
 
 ## Testing Checklist
@@ -988,6 +1473,8 @@ Use this checklist before demonstration or deployment.
 - [ ] Backend starts without errors
 - [ ] `/api/v1/health` returns a successful response
 - [ ] PostgreSQL container is healthy
+- [ ] Backend container becomes healthy
+- [ ] Frontend starts after backend healthcheck passes
 - [ ] Database tables are created
 - [ ] Hall rules are seeded from JSON
 - [ ] ChromaDB vector store is created
@@ -1006,27 +1493,47 @@ Use this checklist before demonstration or deployment.
 ### Student Features
 
 - [ ] Student can upload signature
-- [ ] Student can submit gate-pass request
+- [ ] Student cannot submit gate pass without signature
+- [ ] Student can submit gate-pass request after signature upload
 - [ ] Student can view own gate-pass requests
 - [ ] Student can view notices
 - [ ] Student can submit complaints
 - [ ] Student can view notifications
+- [ ] Student notification click redirects to related page
 - [ ] Student can ask chatbot questions
+- [ ] Student chatbot history is private
 
 ### Admin Features
 
+- [ ] Admin can upload signature
+- [ ] Admin cannot approve gate pass without signature
+- [ ] Admin cannot reject gate pass without signature
 - [ ] Admin can view all gate-pass requests
 - [ ] Admin can approve gate-pass requests
 - [ ] Approved gate-pass PDF is generated
+- [ ] PDF includes the approving admin's signature
 - [ ] Admin can reject gate-pass requests
 - [ ] Admin can publish notices
 - [ ] Notice notifications are created
 - [ ] Admin can view complaints
 - [ ] Admin can update complaint status
 - [ ] Admin can create hall rules
+- [ ] New rule sends notification to active admins and students
 - [ ] Admin can update hall rules
 - [ ] Admin can delete hall rules
 - [ ] Admin can rebuild vector index
+
+### Notification Features
+
+- [ ] Gate-pass approval creates in-app notification
+- [ ] Gate-pass approval sends email if SMTP is enabled
+- [ ] Gate-pass rejection creates notification
+- [ ] Notice creation creates notifications
+- [ ] Complaint status update creates notification
+- [ ] New hall-rule creation notifies all active students and admins
+- [ ] Notification deep links work
+- [ ] Mark one notification as read works
+- [ ] Mark all notifications as read works
 
 ### Frontend
 
@@ -1037,6 +1544,8 @@ Use this checklist before demonstration or deployment.
 - [ ] Admin-only route is hidden from students
 - [ ] Logout clears stored user data
 - [ ] Notification bell displays unread notifications
+- [ ] Chatbot opens with a fresh empty chat
+- [ ] Previous chatbot sessions appear under Recents
 
 ---
 
@@ -1051,6 +1560,29 @@ Recommended actions:
 ```bash
 docker compose build backend
 docker compose up
+```
+
+Persistent cache volumes can reduce repeated model-loading delays:
+
+```text
+hf_cache
+torch_cache
+```
+
+### Backend Shows Running but Login Fails Temporarily
+
+Docker may show a container as running before the FastAPI application is fully ready.
+
+Fix:
+
+- Add backend healthcheck
+- Remove backend `--reload` in Docker
+- Make frontend depend on backend `service_healthy`
+
+Check backend health manually:
+
+```text
+http://localhost:8000/api/v1/health
 ```
 
 ### Backend Cannot Connect to Database
@@ -1103,15 +1635,33 @@ Check that:
 - Admin has rebuilt the vector index if rules were changed.
 - The question is related to hall rules.
 
+### Chatbot History Is Not Showing
+
+Check that:
+
+- User is logged in.
+- JWT token exists.
+- `/api/v1/chat/sessions` returns sessions.
+- `/api/v1/chat/sessions/{session_id}/messages` returns messages.
+- Chat sessions belong to the current user.
+
+### Gate-Pass Submission Fails
+
+Check that:
+
+- The current user is a student.
+- The student has uploaded a signature.
+- Required gate-pass fields are filled.
+
 ### Gate-Pass Approval Fails
 
 Check that:
 
+- The current user is an admin.
+- The admin has uploaded a signature.
 - The student has uploaded a signature.
 - The gate-pass request exists.
-- The current user is an admin.
 - Upload folders are writable.
-- Admin and checker signature assets exist if required.
 
 ### Email Notifications Are Not Sent
 
@@ -1119,9 +1669,39 @@ Check that:
 
 - `EMAIL_NOTIFICATIONS_ENABLED=true`
 - SMTP host, port, username, password, and sender email are configured
-- The SMTP provider allows app-password or SMTP access
+- `SMTP_USERNAME` and `SMTP_FROM_EMAIL` belong to the same sender account
+- Gmail uses a valid App Password, not the normal Gmail password
 - The recipient user has a valid email address
 - Backend logs do not show SMTP errors
+
+Check email logs:
+
+```bash
+docker compose logs backend --tail=200
+```
+
+PowerShell filter:
+
+```powershell
+docker compose logs backend --tail=200 | Select-String "Email"
+```
+
+Common Gmail SMTP error:
+
+```text
+535 5.7.8 Username and Password not accepted
+```
+
+This usually means the SMTP username/password is wrong or a Gmail App Password was not used.
+
+### Notification Deep Links Do Not Work
+
+Check that:
+
+- `notifications.action_url` exists in the database.
+- `NotificationResponse` includes `action_url`.
+- `NotificationBell.jsx` uses `useNavigate`.
+- Notification click handler calls `navigate(notification.action_url)`.
 
 ---
 
@@ -1136,21 +1716,26 @@ Before using this project in production, review the following:
 - Use HTTPS in production.
 - Validate uploaded files carefully.
 - Add file-size limits for uploads.
-- Use proper database migrations.
+- Use proper database migrations such as Alembic.
 - Restrict admin account creation.
 - Store SMTP credentials securely.
+- Use a transactional email provider for production.
 - Review role-based authorization for every admin route.
+- Protect generated PDF download routes in production.
 - Back up the PostgreSQL database regularly.
+- Back up uploaded signatures and generated PDFs.
 
 ---
 
 ## Known Limitations
 
 - The system currently uses startup-based table creation instead of a formal migration workflow.
+- Existing database tables require manual SQL changes when new columns are added.
 - The AI assistant is retrieval-based, not a generative LLM.
 - Chatbot answers depend on the quality and completeness of the hall-rule dataset.
 - The vector model loads inside the backend service, which can increase startup time.
 - SMTP email delivery depends on external email-provider configuration.
+- Generated PDFs are served from static uploads in the development setup.
 - Production deployment requires additional hardening.
 
 ---
@@ -1163,10 +1748,14 @@ Before using this project in production, review the following:
 - Password reset flow
 - Email verification
 - Gate-pass QR code verification
+- Protected PDF download endpoint
 - PDF download history
 - Complaint priority levels
 - Complaint comments or admin notes
 - Real-time notifications using WebSocket
+- Notification delivery status tracking
+- Email retry queue using Celery or RQ
+- Admin notification dashboard
 - Dashboard analytics
 - Hall occupancy management
 - Room allocation module
@@ -1178,6 +1767,8 @@ Before using this project in production, review the following:
 - Improved chatbot confidence scoring
 - Source citation display for chatbot answers
 - Multi-language chatbot support
+- HTML email templates
+- Notification preferences per user
 
 ---
 
@@ -1247,6 +1838,10 @@ For production deployment:
 8. Restrict CORS.
 9. Add logging and monitoring.
 10. Add automated backups for PostgreSQL and uploaded files.
+11. Use Alembic migrations.
+12. Use a transactional email service.
+13. Protect generated PDF download routes.
+14. Use cloud object storage for uploaded signatures and PDFs.
 
 Example production backend command:
 
@@ -1264,7 +1859,6 @@ https://github.com/mehedi77k/DIU-Hall-AI-Assistant
 
 ---
 
-
 ## Project Status
 
 ```text
@@ -1275,6 +1869,8 @@ Backend: FastAPI
 Database: PostgreSQL
 AI Layer: Sentence Transformers + ChromaDB
 Containerization: Docker Compose
+Notification System: In-app + Optional SMTP Email
+Chat History: User-specific PostgreSQL-backed sessions
 ```
 
 ---
