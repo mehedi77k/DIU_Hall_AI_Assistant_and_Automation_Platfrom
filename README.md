@@ -1288,9 +1288,3 @@ https://github.com/mehedi77k/DIU-Hall-AI-Assistant/issues
 ```
 
 ---
-
-## License
-
-No license file is currently included in this repository.
-
-Add a license before distributing, modifying, or using this project in a public or production environment.
