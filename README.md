@@ -265,19 +265,19 @@ This version includes several important new features and security/UX improvement
                 │ SQLAlchemy ORM                │ File Storage
                 ▼                               ▼
 ┌──────────────────────────────┐     ┌───────────────────────────────┐
-│        Database Layer         │     │       Uploads / Assets         │
+│        Database Layer        |     │       Uploads / Assets        | 
 │                              │     │                               │
-│        PostgreSQL             │     │ - User signatures              │
-│                              │     │ - Generated gate-pass PDFs      │
-│  Tables:                      │     │ - Checker signature asset       │
-│  - users                      │     │                               │
-│  - gate_passes                │     └───────────────────────────────┘
-│  - notices                    │
-│  - complaints                 │
-│  - notifications              │
-│  - hall_rules                 │
-│  - chat_sessions              │
-│  - chat_messages              │
+│        PostgreSQL            |     │ - User signatures             | 
+│                              │     │ - Generated gate-pass PDFs    |  
+│  Tables:                     |     │ - Checker signature asset     |  
+│  - users                     |     │                               │
+│  - gate_passes               |     └───────────────────────────────┘
+│  - notices                   |
+│  - complaints                |
+│  - notifications             |
+│  - hall_rules                |
+│  - chat_sessions             |
+│  - chat_messages             |
 └───────────────┬──────────────┘
                 │
                 │ Hall rules are seeded and indexed
