@@ -7,19 +7,21 @@ services:
       POSTGRES_USER: diu_user
       POSTGRES_PASSWORD: diu_password
     ports:
-      - "55432:5432"
+      - "${DB_PORT:-55432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U diu_user -d diu_hall"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   backend:
     build:
       context: ./backend
     container_name: diu_hall_backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+psycopg://diu_user:diu_password@db:5432/diu_hall
       APP_NAME: DIU Hall AI Assistant and Automation Platform
@@ -32,27 +34,53 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      PUBLIC_BACKEND_URL: ${PUBLIC_BACKEND_URL:-http://localhost:8000}
+      PUBLIC_FRONTEND_URL: ${PUBLIC_FRONTEND_URL:-http://localhost:5173}
       ANONYMIZED_TELEMETRY: "False"
-      
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
+      - backend_uploads:/app/uploads
+      - hf_cache:/root/.cache/huggingface
+      - torch_cache:/root/.cache/torch
     depends_on:
       db:
         condition: service_healthy
+
+    # Important: no --reload here.
+    # Backend will be marked healthy only after /api/v1/health responds.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
 
   frontend:
     build:
       context: ./frontend
     container_name: diu_hall_frontend
     ports:
-      - "5173:5173"
+      - "${FRONTEND_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    command: npm run dev -- --host 0.0.0.0 --port 5173
 
 volumes:
   postgres_data:
+  backend_uploads:
+  hf_cache:
+  torch_cache:

@@ -124,6 +124,122 @@ def parse_matched_rules(raw_value: str | None) -> list[dict]:
         return []
 
 
+def build_frontend_url(path: str) -> str:
+    base_url = settings.public_frontend_url.rstrip("/")
+    clean_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url}{clean_path}"
+
+
+def build_backend_url(path: str) -> str:
+    base_url = settings.public_backend_url.rstrip("/")
+    clean_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url}{clean_path}"
+
+
+def build_gate_pass_approved_email(
+    student: User,
+    gate_pass: GatePass,
+    approved_admin: User,
+) -> str:
+    gate_pass_page_url = build_frontend_url("/gate-pass")
+    pdf_url = (
+        build_backend_url(gate_pass.pdf_path)
+        if gate_pass.pdf_path
+        else gate_pass_page_url
+    )
+
+    return f"""
+Dear {student.full_name},
+
+Your gate pass request has been approved.
+
+Gate Pass ID: GP-{gate_pass.id:04d}
+Student ID: {gate_pass.student_id}
+Room No: {gate_pass.room_no}
+Leave Date: {gate_pass.leave_date}
+Return Date: {gate_pass.return_date}
+Approved By: {approved_admin.full_name}
+Approved At: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+Download Gate Pass PDF:
+{pdf_url}
+
+You can also view your gate pass from the DIU Hall AI platform:
+{gate_pass_page_url}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_gate_pass_rejected_email(
+    student: User,
+    gate_pass: GatePass,
+) -> str:
+    gate_pass_page_url = build_frontend_url("/gate-pass")
+
+    return f"""
+Dear {student.full_name},
+
+Your gate pass request has been rejected.
+
+Gate Pass ID: GP-{gate_pass.id:04d}
+Student ID: {gate_pass.student_id}
+Room No: {gate_pass.room_no}
+Leave Date: {gate_pass.leave_date}
+Return Date: {gate_pass.return_date}
+
+Please check the DIU Hall AI platform or contact hall administration for more information.
+
+View Gate Pass Requests:
+{gate_pass_page_url}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_notice_email(student: User, notice: Notice) -> str:
+    return f"""
+Dear {student.full_name},
+
+A new hall notice has been posted.
+
+Title: {notice.title}
+
+{notice.content}
+
+View Notice Board:
+{build_frontend_url("/notices")}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_complaint_status_email(
+    student: User,
+    complaint: Complaint,
+    status: str,
+) -> str:
+    return f"""
+Dear {student.full_name},
+
+Your complaint status has been updated.
+
+Complaint ID: #{complaint.id}
+Category: {complaint.category}
+Room No: {complaint.room_no}
+Status: {status}
+
+View Complaints:
+{build_frontend_url("/complaints")}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
 def draw_signature_box(
     pdf: canvas.Canvas,
     x: float,
@@ -393,7 +509,7 @@ def root():
         "message": "DIU Hall AI Backend is running",
         "health": "/api/v1/health",
         "docs": "/docs",
-        "frontend": "http://localhost:5173",
+        "frontend": settings.public_frontend_url,
     }
 
 
@@ -579,12 +695,21 @@ def approve_gate_pass(
     )
 
     notify_user(
-        db,
-        background_tasks,
-        student,
-        "Gate pass approved",
-        f"Your gate pass request #{gate_pass.id} has been approved.",
-        "gate_pass",
+        db=db,
+        background_tasks=background_tasks,
+        user=student,
+        title="Gate pass approved",
+        message=f"Gate pass GP-{gate_pass.id:04d} has been approved.",
+        category="gate_pass",
+        email_subject=f"Gate Pass Approved - GP-{gate_pass.id:04d}",
+        email_body=build_gate_pass_approved_email(
+            student=student,
+            gate_pass=gate_pass,
+            approved_admin=current_user,
+        ),
+        entity_type="gate_pass",
+        entity_id=gate_pass.id,
+        action_url="/gate-pass",
     )
 
     db.commit()
@@ -617,12 +742,20 @@ def reject_gate_pass(
 
     if student:
         notify_user(
-            db,
-            background_tasks,
-            student,
-            "Gate pass rejected",
-            f"Your gate pass request #{gate_pass.id} has been rejected.",
-            "gate_pass",
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="Gate pass rejected",
+            message=f"Gate pass GP-{gate_pass.id:04d} has been rejected.",
+            category="gate_pass",
+            email_subject=f"Gate Pass Rejected - GP-{gate_pass.id:04d}",
+            email_body=build_gate_pass_rejected_email(
+                student=student,
+                gate_pass=gate_pass,
+            ),
+            entity_type="gate_pass",
+            entity_id=gate_pass.id,
+            action_url="/gate-pass",
         )
 
     db.commit()
@@ -652,6 +785,7 @@ def create_notice(
     )
 
     db.add(notice)
+    db.flush()
 
     students = (
         db.query(User)
@@ -662,12 +796,17 @@ def create_notice(
 
     for student in students:
         notify_user(
-            db,
-            background_tasks,
-            student,
-            "New notice posted",
-            f"New notice: {notice.title}",
-            "notice",
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="New notice posted",
+            message=f"New notice: {notice.title}",
+            category="notice",
+            email_subject=f"New Hall Notice - {notice.title}",
+            email_body=build_notice_email(student, notice),
+            entity_type="notice",
+            entity_id=notice.id,
+            action_url="/notices",
         )
 
     db.commit()
@@ -791,12 +930,21 @@ def update_complaint_status(
 
     if student:
         notify_user(
-            db,
-            background_tasks,
-            student,
-            "Complaint status updated",
-            f"Your complaint #{complaint.id} status changed to {payload.status}.",
-            "complaint",
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="Complaint status updated",
+            message=f"Complaint #{complaint.id} status changed to {payload.status}.",
+            category="complaint",
+            email_subject=f"Complaint Status Updated - #{complaint.id}",
+            email_body=build_complaint_status_email(
+                student=student,
+                complaint=complaint,
+                status=payload.status,
+            ),
+            entity_type="complaint",
+            entity_id=complaint.id,
+            action_url="/complaints",
         )
 
     db.commit()

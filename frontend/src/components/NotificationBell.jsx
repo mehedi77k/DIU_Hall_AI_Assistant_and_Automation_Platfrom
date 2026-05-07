@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 const API_BASE_URL = 'http://localhost:8000'
+
+const getToken = () => sessionStorage.getItem('token') || localStorage.getItem('token')
 
 function formatNotificationTime(value) {
   if (!value) return ''
@@ -9,15 +12,36 @@ function formatNotificationTime(value) {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString()
 }
 
+function getErrorMessage(data, fallback) {
+  if (!data) return fallback
+
+  if (typeof data.detail === 'string') {
+    return data.detail
+  }
+
+  if (Array.isArray(data.detail)) {
+    return data.detail.map((item) => item.msg).join(', ')
+  }
+
+  return fallback
+}
+
 export default function NotificationBell() {
-  const token = sessionStorage.getItem('token')
+  const navigate = useNavigate()
+  const token = getToken()
+
   const [items, setItems] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
   const wrapperRef = useRef(null)
 
   const unreadCount = items.filter((item) => !item.is_read).length
+
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+  }
 
   const loadNotifications = async () => {
     if (!token) return
@@ -27,20 +51,19 @@ export default function NotificationBell() {
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/notifications`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        method: 'GET',
+        headers: authHeaders,
       })
 
       const data = await response.json()
 
       if (!response.ok) {
-        setError(data.detail || 'Failed to load notifications')
+        setError(getErrorMessage(data, 'Failed to load notifications'))
         setItems([])
         return
       }
 
-      setItems(data)
+      setItems(Array.isArray(data) ? data : [])
     } catch {
       setError('Failed to load notifications')
     } finally {
@@ -58,6 +81,7 @@ export default function NotificationBell() {
     }, 30000)
 
     return () => window.clearInterval(intervalId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
   useEffect(() => {
@@ -72,56 +96,73 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const handleNotificationClick = async (notification) => {
-    if (notification.is_read) {
-      return
+  const markNotificationRead = async (notification) => {
+    if (!token || notification.is_read) {
+      return notification
     }
 
+    const response = await fetch(
+      `${API_BASE_URL}/api/v1/notifications/${notification.id}/read`,
+      {
+        method: 'POST',
+        headers: authHeaders,
+      },
+    )
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(getErrorMessage(data, 'Failed to mark notification as read'))
+    }
+
+    setItems((currentItems) =>
+      currentItems.map((item) =>
+        item.id === data.id ? { ...item, is_read: true } : item,
+      ),
+    )
+
+    return data
+  }
+
+  const handleNotificationClick = async (notification) => {
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/v1/notifications/${notification.id}/read`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      )
+      await markNotificationRead(notification)
 
-      const data = await response.json()
+      setIsOpen(false)
 
-      if (!response.ok) {
-        setError(data.detail || 'Failed to mark notification as read')
-        return
+      if (notification.action_url) {
+        navigate(notification.action_url)
       }
-
-      setItems((currentItems) =>
-        currentItems.map((item) =>
-          item.id === data.id ? { ...item, is_read: true } : item
-        )
-      )
-    } catch {
-      setError('Failed to mark notification as read')
+    } catch (err) {
+      setError(err.message || 'Failed to open notification')
     }
   }
 
   const handleMarkAllRead = async () => {
+    if (!token) return
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/notifications/read-all`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: authHeaders,
       })
 
-      const data = await response.json()
+      let data = null
+
+      try {
+        data = await response.json()
+      } catch {
+        data = null
+      }
 
       if (!response.ok) {
-        setError(data.detail || 'Failed to mark all notifications as read')
+        setError(getErrorMessage(data, 'Failed to mark all notifications as read'))
         return
       }
 
-      setItems((currentItems) => currentItems.map((item) => ({ ...item, is_read: true })))
+      setItems((currentItems) =>
+        currentItems.map((item) => ({ ...item, is_read: true })),
+      )
     } catch {
       setError('Failed to mark all notifications as read')
     }
@@ -147,6 +188,7 @@ export default function NotificationBell() {
         <div className="notification-dropdown">
           <div className="notification-dropdown-header">
             <div className="notification-dropdown-title">Notifications</div>
+
             <button
               type="button"
               className="notification-mark-all"
@@ -159,24 +201,35 @@ export default function NotificationBell() {
 
           <div className="notification-dropdown-body">
             {loading && <div className="notification-state">Loading notifications...</div>}
+
             {!loading && error && <div className="notification-state">{error}</div>}
+
             {!loading && !error && items.length === 0 && (
               <div className="notification-state">No notifications yet.</div>
             )}
 
-            {!loading && !error &&
+            {!loading &&
+              !error &&
               items.map((notification) => (
                 <button
                   key={notification.id}
                   type="button"
-                  className={`notification-item ${notification.is_read ? 'read' : 'unread'}`}
+                  className={`notification-item ${
+                    notification.is_read ? 'read' : 'unread'
+                  }`}
                   onClick={() => handleNotificationClick(notification)}
                 >
                   <div className="notification-item-title">{notification.title}</div>
+
                   <div className="notification-item-message">{notification.message}</div>
+
                   <div className="notification-item-meta">
                     {formatNotificationTime(notification.created_at)}
                   </div>
+
+                  {notification.action_url && (
+                    <div className="notification-item-link">View details →</div>
+                  )}
                 </button>
               ))}
           </div>
