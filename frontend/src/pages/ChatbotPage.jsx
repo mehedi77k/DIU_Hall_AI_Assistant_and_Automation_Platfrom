@@ -57,6 +57,9 @@ const normalizeMessage = (message) => ({
 
 const isServerChatId = (id) => typeof id === 'number'
 
+const isEmptyDraftChat = (chat) =>
+  !isServerChatId(chat.id) && chat.messages.length === 0
+
 function getErrorMessage(data, fallback) {
   if (!data) return fallback
 
@@ -128,28 +131,26 @@ export default function ChatbotPage() {
       })
 
       const data = await response.json()
+      const draft = createDraftChat()
 
       if (!response.ok) {
         setError(getErrorMessage(data, 'Failed to load chat history'))
-        const draft = createDraftChat()
         setChats([draft])
         setActiveChatId(draft.id)
         return
       }
 
-      if (!Array.isArray(data) || data.length === 0) {
-        const draft = createDraftChat()
-        setChats([draft])
-        setActiveChatId(draft.id)
-        return
-      }
+      const normalizedSessions = Array.isArray(data)
+        ? data.map(normalizeSession)
+        : []
 
-      const normalized = data.map(normalizeSession)
-      setChats(normalized)
-      setActiveChatId(normalized[0].id)
-      await loadMessages(normalized[0].id)
+      // Always show a fresh empty chat when opening the chatbot page.
+      // Existing saved chats stay in the sidebar as recent chats.
+      setChats([draft, ...normalizedSessions])
+      setActiveChatId(draft.id)
     } catch (err) {
       setError('Backend server is not responding. Please check backend container.')
+
       const draft = createDraftChat()
       setChats([draft])
       setActiveChatId(draft.id)
@@ -164,7 +165,18 @@ export default function ChatbotPage() {
   }, [])
 
   const handleNewChat = () => {
+    const existingEmptyDraft = chats.find(isEmptyDraftChat)
+
+    if (existingEmptyDraft) {
+      setActiveChatId(existingEmptyDraft.id)
+      setInput('')
+      setLoading(false)
+      setError('')
+      return
+    }
+
     const newChat = createDraftChat()
+
     setChats((prev) => [newChat, ...prev])
     setActiveChatId(newChat.id)
     setInput('')
@@ -246,10 +258,13 @@ export default function ChatbotPage() {
       }
 
       if (id === activeChatId) {
-        setActiveChatId(next[0].id)
+        const emptyDraft = next.find(isEmptyDraftChat)
+        const nextActiveChat = emptyDraft || next[0]
 
-        if (isServerChatId(next[0].id) && !next[0].messagesLoaded) {
-          loadMessages(next[0].id)
+        setActiveChatId(nextActiveChat.id)
+
+        if (isServerChatId(nextActiveChat.id) && !nextActiveChat.messagesLoaded) {
+          loadMessages(nextActiveChat.id)
         }
       }
 
@@ -300,6 +315,9 @@ export default function ChatbotPage() {
 
   const filteredChats = chats
     .filter((chat) => {
+      // Do not show the current empty draft chat in recent history.
+      if (isEmptyDraftChat(chat)) return false
+
       const query = searchTerm.trim().toLowerCase()
       if (!query) return true
 
