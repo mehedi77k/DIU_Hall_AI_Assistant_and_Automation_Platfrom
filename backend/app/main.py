@@ -240,6 +240,77 @@ DIU Hall Administration
 """.strip()
 
 
+def build_hall_rule_added_email(
+    user: User,
+    rule: HallRule,
+    added_by: User,
+) -> str:
+    chatbot_url = build_frontend_url("/chatbot")
+    rules_url = build_frontend_url("/admin/rules")
+
+    admin_note = ""
+    if user.role == "admin":
+        admin_note = f"""
+
+Admin Rule Management:
+{rules_url}
+"""
+
+    return f"""
+Dear {user.full_name},
+
+A new hall rule has been added to the DIU Hall AI platform.
+
+Rule Number: {rule.rule_number}
+Section: {rule.section}
+Page: {rule.page if rule.page is not None else "N/A"}
+Added By: {added_by.full_name}
+Added At: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+Rule Text:
+{rule.text}
+
+You can ask questions about this rule from the Hall Rules Chatbot:
+{chatbot_url}{admin_note}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def notify_all_users_about_new_rule(
+    db: Session,
+    background_tasks: BackgroundTasks,
+    rule: HallRule,
+    added_by: User,
+):
+    recipients = (
+        db.query(User)
+        .filter(User.role.in_(["student", "admin"]))
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+
+    for recipient in recipients:
+        notify_user(
+            db=db,
+            background_tasks=background_tasks,
+            user=recipient,
+            title="New hall rule added",
+            message=f"Rule {rule.rule_number} has been added: {rule.section}",
+            category="hall_rule",
+            email_subject=f"New Hall Rule Added - Rule {rule.rule_number}",
+            email_body=build_hall_rule_added_email(
+                user=recipient,
+                rule=rule,
+                added_by=added_by,
+            ),
+            entity_type="hall_rule",
+            entity_id=rule.id,
+            action_url="/chatbot",
+        )
+
+
 def draw_signature_box(
     pdf: canvas.Canvas,
     x: float,
@@ -992,7 +1063,8 @@ def list_hall_rules(
 @app.post("/api/v1/admin/rules", response_model=HallRuleResponse)
 def create_hall_rule(
     payload: HallRuleCreate,
-    _: User = Depends(require_admin),
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     existing_rule = (
@@ -1012,6 +1084,16 @@ def create_hall_rule(
             db.refresh(existing_rule)
 
             upsert_rule_to_vector_db(existing_rule)
+
+            notify_all_users_about_new_rule(
+                db=db,
+                background_tasks=background_tasks,
+                rule=existing_rule,
+                added_by=current_user,
+            )
+
+            db.commit()
+            db.refresh(existing_rule)
 
             return existing_rule
 
@@ -1033,6 +1115,16 @@ def create_hall_rule(
     db.refresh(rule)
 
     upsert_rule_to_vector_db(rule)
+
+    notify_all_users_about_new_rule(
+        db=db,
+        background_tasks=background_tasks,
+        rule=rule,
+        added_by=current_user,
+    )
+
+    db.commit()
+    db.refresh(rule)
 
     return rule
 
