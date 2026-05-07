@@ -1264,14 +1264,6 @@ https://github.com/mehedi77k/DIU-Hall-AI-Assistant
 
 ---
 
-## Developer
-
-**Mehedi Hasan**
-
-- GitHub: [@mehedi77k](https://github.com/mehedi77k)
-- Repository: [DIU-Hall-AI-Assistant](https://github.com/mehedi77k/DIU-Hall-AI-Assistant)
-
----
 
 ## Project Status
 
