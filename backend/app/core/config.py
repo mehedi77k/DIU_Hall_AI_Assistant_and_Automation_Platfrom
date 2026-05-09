@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     public_backend_url: str = "http://localhost:8000"
     public_frontend_url: str = "http://localhost:5173"
 
+    # LLM / RAG generation settings
+    llm_enabled: bool = True
+
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.1-8b-instant"
+
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
+
+    llm_temperature: float = 0.2
+    llm_max_output_tokens: int = 500
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
