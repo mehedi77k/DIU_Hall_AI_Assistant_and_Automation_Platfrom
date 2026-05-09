@@ -26,6 +26,19 @@ The project uses a **React + Vite frontend**, a **FastAPI backend**, a **Postgre
 
 ---
 
+## Repository Setup Note
+
+GitHub renders `README.md` automatically. If your repository currently has `readme.txt`, rename or replace it with `README.md`.
+
+Do not commit your real `.env` file. Keep `.env` local, commit `.env.example` with placeholder values only, and add `.env` to `.gitignore`.
+
+```bash
+git rm --cached --ignore-unmatch .env
+echo .env >> .gitignore
+```
+
+---
+
 ## Latest Updates
 
 This version includes several important new features and security/UX improvements:
@@ -265,19 +278,19 @@ This version includes several important new features and security/UX improvement
                 │ SQLAlchemy ORM                │ File Storage
                 ▼                               ▼
 ┌──────────────────────────────┐     ┌───────────────────────────────┐
-│        Database Layer        |     │       Uploads / Assets        | 
+│        Database Layer        │     │       Uploads / Assets        │
 │                              │     │                               │
-│        PostgreSQL            |     │ - User signatures             | 
-│                              │     │ - Generated gate-pass PDFs    |  
-│  Tables:                     |     │ - Checker signature asset     |  
-│  - users                     |     │                               │
-│  - gate_passes               |     └───────────────────────────────┘
-│  - notices                   |
-│  - complaints                |
-│  - notifications             |
-│  - hall_rules                |
-│  - chat_sessions             |
-│  - chat_messages             |
+│        PostgreSQL            │     │ - User signatures             │
+│                              │     │ - Generated gate-pass PDFs    │
+│  Tables:                     │     │ - Checker signature asset     │
+│  - users                     │     │                               │
+│  - gate_passes               │     └───────────────────────────────┘
+│  - notices                   │
+│  - complaints                │
+│  - notifications             │
+│  - hall_rules                │
+│  - chat_sessions             │
+│  - chat_messages             │
 └───────────────┬──────────────┘
                 │
                 │ Hall rules are seeded and indexed
@@ -505,7 +518,8 @@ DIU-Hall-AI-Assistant
 │   └── package-lock.json
 │
 ├── docker-compose.yml
-├── .env
+├── .env.example
+├── .gitignore
 └── README.md
 ```
 
@@ -685,6 +699,8 @@ PUBLIC_FRONTEND_URL=http://localhost:5173
 BACKEND_PORT=8000
 FRONTEND_PORT=5173
 DB_PORT=55432
+
+ANONYMIZED_TELEMETRY=False
 ```
 
 If you do not want email notifications during development:
@@ -945,7 +961,7 @@ EMAIL_NOTIFICATIONS_ENABLED=true
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USERNAME=diuhallassistant@gmail.com
-SMTP_PASSWORD=abcdefghijklmnop
+SMTP_PASSWORD=your_16_character_app_password
 SMTP_FROM_EMAIL=diuhallassistant@gmail.com
 SMTP_USE_TLS=true
 ```
