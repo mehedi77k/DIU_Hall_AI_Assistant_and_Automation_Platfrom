@@ -8,7 +8,12 @@ from app.core.config import settings
 from app.models import Notification, User
 
 
-def send_email(recipient_email: str, title: str, message: str) -> None:
+def send_email(
+    recipient_email: str,
+    title: str,
+    message: str,
+    html_message: str | None = None,
+) -> None:
     """
     Send an email via SMTP.
 
@@ -43,6 +48,9 @@ DIU Hall AI Assistant & Automation Platform
     email_message["From"] = from_email
     email_message["To"] = recipient_email
     email_message.set_content(email_body)
+
+    if html_message:
+        email_message.add_alternative(html_message, subtype="html")
 
     try:
         with smtplib.SMTP(

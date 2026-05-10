@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     public_backend_url: str = "http://localhost:8000"
     public_frontend_url: str = "http://localhost:5173"
 
+    # Password reset settings
+    password_reset_token_expire_minutes: int = 30
+
     # LLM / RAG generation settings
     llm_enabled: bool = True
 

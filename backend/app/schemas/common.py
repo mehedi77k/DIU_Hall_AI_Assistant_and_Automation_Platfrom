@@ -153,6 +153,21 @@ class UserLogin(BaseModel):
     password: str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    token: str
+    new_password: str
+    confirm_new_password: str
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
 class UserResponse(BaseModel):
     id: int
     full_name: str

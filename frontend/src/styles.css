@@ -750,6 +750,26 @@ button:disabled {
   max-width: 500px;
 }
 
+.auth-link-row {
+  margin-top: 4px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.auth-link-row.right {
+  text-align: right;
+}
+
+.auth-link-row a {
+  color: #0f5132;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-link-row a:hover {
+  text-decoration: underline;
+}
+
 /* Admin Rules Page */
 
 .admin-rules-page {
@@ -780,10 +800,12 @@ button:disabled {
 
 .error-message {
   border-left: 4px solid #dc3545;
+  color: #dc3545;
 }
 
 .success-message {
   border-left: 4px solid #198754;
+  color: #198754;
 }
 
 .admin-rules-grid {

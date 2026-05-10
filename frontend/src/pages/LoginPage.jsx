@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 const API_BASE_URL = 'http://localhost:8000'
 
@@ -114,6 +114,10 @@ export default function LoginPage() {
                 />
               </svg>
             </button>
+          </div>
+
+          <div className="auth-link-row right">
+            <Link to="/forgot-password">Forgot Password?</Link>
           </div>
 
           {error && <p style={{ color: 'red', margin: 0 }}>{error}</p>}

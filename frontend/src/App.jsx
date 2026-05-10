@@ -7,6 +7,8 @@ import ComplaintsPage from './pages/ComplaintsPage'
 import ChatbotPage from './pages/ChatbotPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
+import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import ProfilePage from './pages/ProfilePage'
 import AdminRulesPage from './pages/AdminRulesPage'
 import NotificationBell from './components/NotificationBell'
@@ -186,6 +188,28 @@ export default function App() {
               <ProtectedRoute user={user} allowedRoles={['admin']}>
                 <AdminRulesPage />
               </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/forgot-password"
+            element={
+              user ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <ForgotPasswordPage />
+              )
+            }
+          />
+
+          <Route
+            path="/reset-password"
+            element={
+              user ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <ResetPasswordPage />
+              )
             }
           />
 

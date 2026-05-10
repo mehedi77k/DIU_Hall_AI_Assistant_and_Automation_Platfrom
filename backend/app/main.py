@@ -4,6 +4,7 @@ import textwrap
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
@@ -17,7 +18,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.dependencies import get_current_user, require_admin
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    create_password_reset_token,
+    decode_password_reset_token,
+    hash_password,
+    verify_password,
+)
 from app.db.base import Base
 from app.db.session import engine, get_db
 from app.db.seed_hall_rules import seed_hall_rules_from_json
@@ -41,14 +48,17 @@ from app.schemas.common import (
     ComplaintCreate,
     ComplaintResponse,
     ComplaintStatusUpdate,
+    ForgotPasswordRequest,
     GatePassCreate,
     GatePassResponse,
     HallRuleCreate,
     HallRuleResponse,
     HallRuleUpdate,
+    MessageResponse,
     NoticeCreate,
     NoticeResponse,
     NotificationResponse,
+    ResetPasswordRequest,
     TestEmailRequest,
     TokenResponse,
     UserLogin,
@@ -134,6 +144,52 @@ def build_backend_url(path: str) -> str:
     base_url = settings.public_backend_url.rstrip("/")
     clean_path = path if path.startswith("/") else f"/{path}"
     return f"{base_url}{clean_path}"
+
+
+def build_password_reset_email_text(user: User, reset_url: str) -> str:
+    return f"""
+Dear {user.full_name},
+
+We received a request to reset your DIU Hall AI account password.
+
+Click this link to reset your password:
+{reset_url}
+
+This link will expire in {settings.password_reset_token_expire_minutes} minutes.
+
+If you did not request this, you can ignore this email.
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_password_reset_email_html(user: User, reset_url: str) -> str:
+    return f"""
+<!doctype html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+    <p>Dear {user.full_name},</p>
+
+    <p>We received a request to reset your DIU Hall AI account password.</p>
+
+    <p>
+      <a href="{reset_url}"
+         style="display: inline-block; background: #198754; color: #ffffff;
+                padding: 12px 18px; border-radius: 8px; text-decoration: none;
+                font-weight: 700;">
+        Reset Password
+      </a>
+    </p>
+
+    <p>This link will expire in {settings.password_reset_token_expire_minutes} minutes.</p>
+
+    <p>If you did not request this, you can ignore this email.</p>
+
+    <p>Regards,<br>DIU Hall Administration</p>
+  </body>
+</html>
+""".strip()
 
 
 def build_gate_pass_approved_email(
@@ -632,6 +688,92 @@ def login_user(payload: UserLogin, db: Session = Depends(get_db)):
         access_token=token,
         token_type="bearer",
         user=user,
+    )
+
+
+@app.post("/api/v1/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    generic_message = (
+        "If an account exists for this email, a password reset link has been sent."
+    )
+
+    user = db.query(User).filter(User.email == str(payload.email)).first()
+
+    # Security: do not reveal whether the email exists.
+    if not user or not user.is_active:
+        return MessageResponse(message=generic_message)
+
+    token = create_password_reset_token(user.id, user.email)
+    query = urlencode({"token": token, "email": user.email})
+    reset_url = build_frontend_url(f"/reset-password?{query}")
+
+    background_tasks.add_task(
+        send_email,
+        user.email,
+        "Reset your DIU Hall AI password",
+        build_password_reset_email_text(user, reset_url),
+        build_password_reset_email_html(user, reset_url),
+    )
+
+    return MessageResponse(message=generic_message)
+
+
+@app.post("/api/v1/auth/reset-password", response_model=MessageResponse)
+def reset_password(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    if payload.new_password != payload.confirm_new_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 6 characters long",
+        )
+
+    token_data = decode_password_reset_token(payload.token)
+
+    if not token_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset link",
+        )
+
+    token_email = token_data.get("email")
+    token_user_id = token_data.get("sub")
+
+    if token_email != str(payload.email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email does not match reset link",
+        )
+
+    try:
+        user_id = int(token_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reset link",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user or not user.is_active or user.email != str(payload.email):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reset request",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+
+    return MessageResponse(
+        message="Password reset successful. Please login with your new password."
     )
 
 
