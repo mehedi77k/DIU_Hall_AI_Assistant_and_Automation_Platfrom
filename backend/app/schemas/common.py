@@ -26,9 +26,43 @@ class GatePassResponse(BaseModel):
     status: str
     approved_by: str | None = None
     pdf_path: str | None = None
+
+    # QR / Gate Security fields
+    verification_id: str | None = None
+    qr_code_path: str | None = None
+    used_at: datetime | None = None
+    used_by_security_id: int | None = None
+
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class GateSecurityGatePassResponse(BaseModel):
+    id: int
+    verification_id: str
+    student_name: str
+    student_id: str
+    room_no: str
+    leave_date: date
+    return_date: date
+    guardian_phone: str
+    reason: str
+    item_list: str
+    status: str
+    approved_by: str | None = None
+    pdf_path: str | None = None
+    used_at: datetime | None = None
+    used_by_security_id: int | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GateSecurityVerificationResponse(BaseModel):
+    status: str
+    message: str
+    gate_pass: GateSecurityGatePassResponse | None = None
 
 
 class NoticeCreate(BaseModel):
@@ -145,7 +179,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     phone: str | None = None
     password: str
-    role: Literal["student", "admin"] = "student"
+    role: Literal["student", "admin", "gate_security"] = "student"
 
 
 class UserLogin(BaseModel):

@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
 
+import qrcode
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +18,7 @@ from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.dependencies import get_current_user, require_admin
+from app.core.dependencies import get_current_user, require_admin, require_gate_security
 from app.core.security import (
     create_access_token,
     create_password_reset_token,
@@ -51,6 +52,7 @@ from app.schemas.common import (
     ForgotPasswordRequest,
     GatePassCreate,
     GatePassResponse,
+    GateSecurityVerificationResponse,
     HallRuleCreate,
     HallRuleResponse,
     HallRuleUpdate,
@@ -77,6 +79,7 @@ BASE_DIR = Path("/app")
 UPLOADS_DIR = BASE_DIR / "uploads"
 STUDENT_SIGNATURE_DIR = UPLOADS_DIR / "signatures" / "students"
 GATE_PASS_PDF_DIR = UPLOADS_DIR / "gate_pass_pdfs"
+GATE_PASS_QR_DIR = UPLOADS_DIR / "gate_pass_qr_codes"
 
 ASSET_SIGNATURE_DIR = BASE_DIR / "assets" / "signatures"
 CHECKER_SIGNATURE_PATH = ASSET_SIGNATURE_DIR / "checker_signature.png"
@@ -85,6 +88,7 @@ CHECKER_SIGNATURE_PATH = ASSET_SIGNATURE_DIR / "checker_signature.png"
 def ensure_directories():
     STUDENT_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
     GATE_PASS_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    GATE_PASS_QR_DIR.mkdir(parents=True, exist_ok=True)
     ASSET_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -146,6 +150,42 @@ def build_backend_url(path: str) -> str:
     return f"{base_url}{clean_path}"
 
 
+def generate_gate_pass_verification_id(gate_pass: GatePass) -> str:
+    return f"GP-{gate_pass.id:04d}-{uuid4().hex[:12].upper()}"
+
+
+def generate_gate_pass_qr_code(gate_pass: GatePass) -> str:
+    ensure_directories()
+
+    if not gate_pass.verification_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Gate pass verification ID is missing",
+        )
+
+    verify_url = build_frontend_url(
+        f"/gate-security/verify/{gate_pass.verification_id}"
+    )
+
+    safe_verification_id = gate_pass.verification_id.replace("/", "_")
+    filename = f"gate_pass_qr_{gate_pass.id}_{safe_verification_id}.png"
+    qr_file_path = GATE_PASS_QR_DIR / filename
+
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(verify_url)
+    qr.make(fit=True)
+
+    image = qr.make_image(fill_color="black", back_color="white")
+    image.save(qr_file_path)
+
+    return f"/uploads/gate_pass_qr_codes/{filename}"
+
+
 def build_password_reset_email_text(user: User, reset_url: str) -> str:
     return f"""
 Dear {user.full_name},
@@ -204,6 +244,14 @@ def build_gate_pass_approved_email(
         else gate_pass_page_url
     )
 
+    verification_text = ""
+    if gate_pass.verification_id:
+        verification_text = f"""
+
+Verification ID:
+{gate_pass.verification_id}
+"""
+
     return f"""
 Dear {student.full_name},
 
@@ -215,7 +263,7 @@ Room No: {gate_pass.room_no}
 Leave Date: {gate_pass.leave_date}
 Return Date: {gate_pass.return_date}
 Approved By: {approved_admin.full_name}
-Approved At: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+Approved At: {datetime.now().strftime("%Y-%m-%d %H:%M")}{verification_text}
 
 Download Gate Pass PDF:
 {pdf_url}
@@ -400,6 +448,53 @@ def draw_signature_box(
 
     pdf.setFont("Times-Bold", 10)
     pdf.drawString(x, y - 14, label)
+
+
+def draw_gate_pass_qr_box(pdf: canvas.Canvas, gate_pass: GatePass, page_width: float, margin_x: float):
+    qr_file = public_path_to_file(gate_pass.qr_code_path)
+    qr_size = 30 * mm
+
+    qr_x = page_width - margin_x - qr_size - 8
+    qr_y = 35 * mm
+
+    if not qr_file or not qr_file.exists():
+        return
+
+    pdf.setStrokeColor(colors.HexColor("#0f5132"))
+    pdf.setLineWidth(0.7)
+    pdf.rect(
+        qr_x - 4,
+        qr_y - 4,
+        qr_size + 8,
+        qr_size + 20,
+        stroke=1,
+        fill=0,
+    )
+
+    pdf.drawImage(
+        str(qr_file),
+        qr_x,
+        qr_y,
+        width=qr_size,
+        height=qr_size,
+        preserveAspectRatio=True,
+        mask="auto",
+    )
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Times-Bold", 7)
+    pdf.drawCentredString(
+        qr_x + (qr_size / 2),
+        qr_y - 8,
+        "Scan to Verify",
+    )
+
+    pdf.setFont("Times-Roman", 6)
+    pdf.drawCentredString(
+        qr_x + (qr_size / 2),
+        qr_y - 16,
+        gate_pass.verification_id or "",
+    )
 
 
 def generate_gate_pass_pdf(
@@ -591,6 +686,13 @@ def generate_gate_pass_pdf(
         "Checked By",
         CHECKER_SIGNATURE_PATH,
         "Checker signature",
+    )
+
+    draw_gate_pass_qr_box(
+        pdf=pdf,
+        gate_pass=gate_pass,
+        page_width=page_width,
+        margin_x=margin_x,
     )
 
     pdf.setFont("Times-Roman", 9)
@@ -901,6 +1003,12 @@ def approve_gate_pass(
 
     gate_pass.status = "approved"
     gate_pass.approved_by = current_user.full_name
+
+    if not gate_pass.verification_id:
+        gate_pass.verification_id = generate_gate_pass_verification_id(gate_pass)
+
+    gate_pass.qr_code_path = generate_gate_pass_qr_code(gate_pass)
+
     gate_pass.pdf_path = generate_gate_pass_pdf(
         gate_pass,
         student,
@@ -975,6 +1083,98 @@ def reject_gate_pass(
     db.refresh(gate_pass)
 
     return gate_pass
+
+
+@app.get(
+    "/api/v1/gate-security/gate-pass/{verification_id}",
+    response_model=GateSecurityVerificationResponse,
+)
+def verify_gate_pass_for_security(
+    verification_id: str,
+    _: User = Depends(require_gate_security),
+    db: Session = Depends(get_db),
+):
+    gate_pass = (
+        db.query(GatePass)
+        .filter(GatePass.verification_id == verification_id)
+        .first()
+    )
+
+    if not gate_pass:
+        return GateSecurityVerificationResponse(
+            status="invalid",
+            message="Invalid gate pass QR code.",
+            gate_pass=None,
+        )
+
+    if gate_pass.status != "approved":
+        return GateSecurityVerificationResponse(
+            status="not_approved",
+            message="This gate pass is not approved.",
+            gate_pass=gate_pass,
+        )
+
+    if gate_pass.used_at is not None:
+        return GateSecurityVerificationResponse(
+            status="already_used",
+            message="This gate pass has already been used.",
+            gate_pass=gate_pass,
+        )
+
+    return GateSecurityVerificationResponse(
+        status="valid",
+        message="Gate pass is valid.",
+        gate_pass=gate_pass,
+    )
+
+
+@app.post(
+    "/api/v1/gate-security/gate-pass/{verification_id}/use",
+    response_model=GateSecurityVerificationResponse,
+)
+def use_gate_pass_for_security(
+    verification_id: str,
+    current_user: User = Depends(require_gate_security),
+    db: Session = Depends(get_db),
+):
+    gate_pass = (
+        db.query(GatePass)
+        .filter(GatePass.verification_id == verification_id)
+        .first()
+    )
+
+    if not gate_pass:
+        return GateSecurityVerificationResponse(
+            status="invalid",
+            message="Invalid gate pass QR code.",
+            gate_pass=None,
+        )
+
+    if gate_pass.status != "approved":
+        return GateSecurityVerificationResponse(
+            status="not_approved",
+            message="This gate pass is not approved.",
+            gate_pass=gate_pass,
+        )
+
+    if gate_pass.used_at is not None:
+        return GateSecurityVerificationResponse(
+            status="already_used",
+            message="This gate pass has already been used.",
+            gate_pass=gate_pass,
+        )
+
+    gate_pass.used_at = datetime.utcnow()
+    gate_pass.used_by_security_id = current_user.id
+
+    db.commit()
+    db.refresh(gate_pass)
+
+    return GateSecurityVerificationResponse(
+        status="used",
+        message="Gate pass marked as used successfully.",
+        gate_pass=gate_pass,
+    )
 
 
 @app.get("/api/v1/notices", response_model=list[NoticeResponse])

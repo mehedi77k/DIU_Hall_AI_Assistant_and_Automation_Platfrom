@@ -808,6 +808,11 @@ button:disabled {
   color: #198754;
 }
 
+.warning-message {
+  border-left: 4px solid #f59e0b;
+  color: #92400e;
+}
+
 .admin-rules-grid {
   display: flex;
   flex-direction: column;
@@ -874,6 +879,40 @@ button:disabled {
 
 .rule-list-item {
   line-height: 1.5;
+}
+
+/* Gate Security Page */
+
+.security-result-card {
+  border-left: 4px solid #198754;
+}
+
+.security-result-card.invalid {
+  border-left-color: #dc3545;
+}
+
+.security-result-card.used {
+  border-left-color: #f59e0b;
+}
+
+.security-details-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.security-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.qr-scanner-box {
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid #dbe4dd;
+  background: #ffffff;
 }
 
 .rules-scroll-area::-webkit-scrollbar,

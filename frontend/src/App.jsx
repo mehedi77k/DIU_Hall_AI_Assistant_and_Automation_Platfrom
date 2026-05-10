@@ -2,6 +2,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-r
 
 import Dashboard from './pages/Dashboard'
 import GatePassPage from './pages/GatePassPage'
+import GateSecurityPage from './pages/GateSecurityPage'
 import NoticeBoardPage from './pages/NoticeBoardPage'
 import ComplaintsPage from './pages/ComplaintsPage'
 import ChatbotPage from './pages/ChatbotPage'
@@ -23,13 +24,25 @@ function getStoredUser() {
   }
 }
 
+function getDefaultPathForUser(user) {
+  if (!user) {
+    return '/login'
+  }
+
+  if (user.role === 'gate_security') {
+    return '/gate-security'
+  }
+
+  return '/dashboard'
+}
+
 function ProtectedRoute({ user, children, allowedRoles = null }) {
   if (!user) {
     return <Navigate to="/login" replace />
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/dashboard" replace />
+    return <Navigate to={getDefaultPathForUser(user)} replace />
   }
 
   return children
@@ -41,17 +54,21 @@ export default function App() {
   const user = getStoredUser()
 
   const navItems = user
-    ? [
-        { path: '/dashboard', label: 'Dashboard' },
-        { path: '/profile', label: 'My Profile' },
-        { path: '/gate-pass', label: 'Gate Pass' },
-        { path: '/notices', label: 'Notice Board' },
-        { path: '/complaints', label: 'Complaints' },
-        { path: '/chatbot', label: 'Chatbot' },
-        ...(user.role === 'admin'
-          ? [{ path: '/admin/rules', label: 'Manage Rules' }]
-          : []),
-      ]
+    ? user.role === 'gate_security'
+      ? [
+          { path: '/gate-security', label: 'Gate Security' },
+        ]
+      : [
+          { path: '/dashboard', label: 'Dashboard' },
+          { path: '/profile', label: 'My Profile' },
+          { path: '/gate-pass', label: 'Gate Pass' },
+          { path: '/notices', label: 'Notice Board' },
+          { path: '/complaints', label: 'Complaints' },
+          { path: '/chatbot', label: 'Chatbot' },
+          ...(user.role === 'admin'
+            ? [{ path: '/admin/rules', label: 'Manage Rules' }]
+            : []),
+        ]
     : [
         { path: '/login', label: 'Login' },
         { path: '/register', label: 'Register' },
@@ -85,11 +102,15 @@ export default function App() {
               <div className="sidebar-user-info">
                 <div className="sidebar-user-name">{user.full_name}</div>
                 <div className="sidebar-user-role">
-                  {user.role === 'admin' ? 'Administrative' : 'Student'}
+                  {user.role === 'admin'
+                    ? 'Administrative'
+                    : user.role === 'gate_security'
+                      ? 'Gate Security'
+                      : 'Student'}
                 </div>
               </div>
 
-              <NotificationBell />
+              {user.role !== 'gate_security' && <NotificationBell />}
             </div>
           )}
         </div>
@@ -121,7 +142,7 @@ export default function App() {
             path="/"
             element={
               user ? (
-                <Navigate to="/dashboard" replace />
+                <Navigate to={getDefaultPathForUser(user)} replace />
               ) : (
                 <Navigate to="/login" replace />
               )
@@ -131,7 +152,7 @@ export default function App() {
           <Route
             path="/dashboard"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <Dashboard />
               </ProtectedRoute>
             }
@@ -140,7 +161,7 @@ export default function App() {
           <Route
             path="/profile"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <ProfilePage />
               </ProtectedRoute>
             }
@@ -149,8 +170,26 @@ export default function App() {
           <Route
             path="/gate-pass"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <GatePassPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/gate-security"
+            element={
+              <ProtectedRoute user={user} allowedRoles={['gate_security']}>
+                <GateSecurityPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/gate-security/verify/:verificationId"
+            element={
+              <ProtectedRoute user={user} allowedRoles={['gate_security']}>
+                <GateSecurityPage />
               </ProtectedRoute>
             }
           />
@@ -158,7 +197,7 @@ export default function App() {
           <Route
             path="/notices"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <NoticeBoardPage />
               </ProtectedRoute>
             }
@@ -167,7 +206,7 @@ export default function App() {
           <Route
             path="/complaints"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <ComplaintsPage />
               </ProtectedRoute>
             }
@@ -176,7 +215,7 @@ export default function App() {
           <Route
             path="/chatbot"
             element={
-              <ProtectedRoute user={user}>
+              <ProtectedRoute user={user} allowedRoles={['student', 'admin']}>
                 <ChatbotPage />
               </ProtectedRoute>
             }
@@ -195,7 +234,7 @@ export default function App() {
             path="/forgot-password"
             element={
               user ? (
-                <Navigate to="/dashboard" replace />
+                <Navigate to={getDefaultPathForUser(user)} replace />
               ) : (
                 <ForgotPasswordPage />
               )
@@ -206,7 +245,7 @@ export default function App() {
             path="/reset-password"
             element={
               user ? (
-                <Navigate to="/dashboard" replace />
+                <Navigate to={getDefaultPathForUser(user)} replace />
               ) : (
                 <ResetPasswordPage />
               )
@@ -215,12 +254,24 @@ export default function App() {
 
           <Route
             path="/login"
-            element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />}
+            element={
+              user ? (
+                <Navigate to={getDefaultPathForUser(user)} replace />
+              ) : (
+                <LoginPage />
+              )
+            }
           />
 
           <Route
             path="/register"
-            element={user ? <Navigate to="/dashboard" replace /> : <RegisterPage />}
+            element={
+              user ? (
+                <Navigate to={getDefaultPathForUser(user)} replace />
+              ) : (
+                <RegisterPage />
+              )
+            }
           />
 
           <Route path="*" element={<Navigate to="/" replace />} />

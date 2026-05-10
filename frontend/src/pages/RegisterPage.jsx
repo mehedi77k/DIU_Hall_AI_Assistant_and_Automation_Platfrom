@@ -26,23 +26,38 @@ function getErrorMessage(data, fallback) {
   return fallback
 }
 
+function getRoleLabel(role) {
+  if (role === 'admin') return 'Administrative'
+  if (role === 'gate_security') return 'Gate Security'
+  return 'Student'
+}
+
+function getIdPlaceholder(role) {
+  if (role === 'admin') return 'Admin ID'
+  if (role === 'gate_security') return 'Security ID'
+  return 'Student ID'
+}
+
 export default function RegisterPage() {
   const [form, setForm] = useState(initialForm)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+
   const navigate = useNavigate()
 
-  const handleChange = (e) => {
+  const handleChange = (event) => {
     setForm({
       ...form,
-      [e.target.name]: e.target.value,
+      [event.target.name]: event.target.value,
     })
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
     setError('')
     setSuccess('')
+    setLoading(true)
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
@@ -50,7 +65,14 @@ export default function RegisterPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          full_name: form.full_name,
+          student_id: form.student_id,
+          email: form.email,
+          phone: form.phone || null,
+          password: form.password,
+          role: form.role,
+        }),
       })
 
       const data = await response.json()
@@ -60,14 +82,16 @@ export default function RegisterPage() {
         return
       }
 
-      setSuccess('Registration successful. Please login now.')
+      setSuccess(`${getRoleLabel(form.role)} account created successfully.`)
       setForm(initialForm)
 
       setTimeout(() => {
         navigate('/login')
-      }, 1000)
+      }, 800)
     } catch (err) {
       setError('Backend server is not responding. Please check backend container.')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -77,15 +101,24 @@ export default function RegisterPage() {
         <h1>Register</h1>
 
         <form onSubmit={handleSubmit} className="form-grid">
-          <label>Register As</label>
-
-          <select name="role" value={form.role} onChange={handleChange} required>
-            <option value="student">Student</option>
-            <option value="admin">Administrative</option>
-          </select>
+          <label>
+            Register As
+            <select
+              name="role"
+              value={form.role}
+              onChange={handleChange}
+              required
+              style={{ marginTop: '8px' }}
+            >
+              <option value="student">Student</option>
+              <option value="admin">Administrative</option>
+              <option value="gate_security">Gate Security</option>
+            </select>
+          </label>
 
           <input
             name="full_name"
+            type="text"
             placeholder="Full Name"
             value={form.full_name}
             onChange={handleChange}
@@ -94,7 +127,8 @@ export default function RegisterPage() {
 
           <input
             name="student_id"
-            placeholder={form.role === 'admin' ? 'Administrative ID' : 'Student ID'}
+            type="text"
+            placeholder={getIdPlaceholder(form.role)}
             value={form.student_id}
             onChange={handleChange}
             required
@@ -111,6 +145,7 @@ export default function RegisterPage() {
 
           <input
             name="phone"
+            type="text"
             placeholder="Phone"
             value={form.phone}
             onChange={handleChange}
@@ -123,15 +158,14 @@ export default function RegisterPage() {
             value={form.password}
             onChange={handleChange}
             required
+            minLength={6}
           />
 
           {error && <p style={{ color: 'red', margin: 0 }}>{error}</p>}
           {success && <p style={{ color: 'green', margin: 0 }}>{success}</p>}
 
-          <button type="submit">
-            {form.role === 'admin'
-              ? 'Create Administrative Account'
-              : 'Create Student Account'}
+          <button type="submit" disabled={loading}>
+            {loading ? 'Creating account...' : `Create ${getRoleLabel(form.role)} Account`}
           </button>
         </form>
       </div>

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 
+const API_BASE_URL = 'http://localhost:8000'
+
 const initialForm = {
   room_no: '',
   leave_date: '',
@@ -9,37 +11,79 @@ const initialForm = {
   item_list: '',
 }
 
+function getStoredUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('user') || localStorage.getItem('user') || 'null')
+  } catch {
+    return null
+  }
+}
+
+function getStoredToken() {
+  return sessionStorage.getItem('token') || localStorage.getItem('token') || ''
+}
+
+function getErrorMessage(data, fallback) {
+  if (!data) return fallback
+
+  if (typeof data.detail === 'string') {
+    return data.detail
+  }
+
+  if (Array.isArray(data.detail)) {
+    return data.detail.map((item) => item.msg).join(', ')
+  }
+
+  return fallback
+}
+
+function formatDateTime(value) {
+  if (!value) return 'N/A'
+
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
 export default function GatePassPage() {
-  const user = JSON.parse(sessionStorage.getItem('user') || 'null')
-  const token = sessionStorage.getItem('token')
+  const user = getStoredUser()
+  const token = getStoredToken()
 
   const [form, setForm] = useState(initialForm)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
+  const [actionLoadingId, setActionLoadingId] = useState(null)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
   const loadGatePasses = async () => {
     setError('')
 
-    const response = await fetch('http://localhost:8000/api/v1/gate-passes', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/gate-passes`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
 
-    const data = await response.json()
+      const data = await response.json()
 
-    if (!response.ok) {
-      setError(data.detail || 'Failed to load gate passes')
-      return
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to load gate passes'))
+        return
+      }
+
+      setItems(data)
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
     }
-
-    setItems(data)
   }
 
   useEffect(() => {
     loadGatePasses()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleChange = (event) => {
@@ -52,54 +96,66 @@ export default function GatePassPage() {
     setError('')
     setSuccess('')
 
-    const response = await fetch('http://localhost:8000/api/v1/gate-passes', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(form),
-    })
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/gate-passes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(form),
+      })
 
-    const data = await response.json()
+      const data = await response.json()
 
-    if (!response.ok) {
-      setError(data.detail || 'Failed to submit gate pass')
+      if (!response.ok) {
+        setError(getErrorMessage(data, 'Failed to submit gate pass'))
+        return
+      }
+
+      setSuccess('Gate pass request submitted successfully.')
+      setForm(initialForm)
+      await loadGatePasses()
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
+    } finally {
       setLoading(false)
-      return
     }
-
-    setSuccess('Gate pass request submitted successfully.')
-    setForm(initialForm)
-    await loadGatePasses()
-    setLoading(false)
   }
 
   const handleAdminAction = async (gatePassId, action) => {
     setError('')
     setSuccess('')
+    setActionLoadingId(gatePassId)
 
-    const response = await fetch(`http://localhost:8000/api/v1/gate-passes/${gatePassId}/${action}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/gate-passes/${gatePassId}/${action}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
 
-    const data = await response.json()
+      const data = await response.json()
 
-    if (!response.ok) {
-      setError(data.detail || `Failed to ${action} gate pass`)
-      return
+      if (!response.ok) {
+        setError(getErrorMessage(data, `Failed to ${action} gate pass`))
+        return
+      }
+
+      setSuccess(`Gate pass ${action}d successfully.`)
+      await loadGatePasses()
+    } catch (err) {
+      setError('Backend server is not responding. Please check backend container.')
+    } finally {
+      setActionLoadingId(null)
     }
-
-    setSuccess(`Gate pass ${action}d successfully.`)
-    await loadGatePasses()
   }
 
   return (
     <div>
       <h1>Gate Pass System</h1>
+
       <p className="page-lead">
         {user?.role === 'student'
           ? 'Only logged-in students can submit gate pass requests.'
@@ -208,6 +264,7 @@ export default function GatePassPage() {
             {items.map((item) => (
               <div key={item.id} className="list-item">
                 <strong>{item.student_name}</strong>
+
                 <span>ID: {item.student_id}</span>
                 <span>Room: {item.room_no}</span>
                 <span>Leave: {item.leave_date}</span>
@@ -215,32 +272,78 @@ export default function GatePassPage() {
                 <span>Guardian: {item.guardian_phone}</span>
                 <span>Reason: {item.reason}</span>
                 <span>Items: {item.item_list}</span>
+
                 <span className={`status ${item.status}`}>{item.status}</span>
 
                 {item.approved_by && <span>Approved by: {item.approved_by}</span>}
 
-                {item.pdf_path && (
-                  <a
-                    href={`http://localhost:8000${item.pdf_path}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: '#198754', fontWeight: 700 }}
-                  >
-                    Open Generated PDF
-                  </a>
+                {item.verification_id && (
+                  <span>
+                    <strong>Verification ID:</strong> {item.verification_id}
+                  </span>
                 )}
+
+                {item.used_at ? (
+                  <span
+                    style={{
+                      color: '#92400e',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Already Used: {formatDateTime(item.used_at)}
+                  </span>
+                ) : item.status === 'approved' ? (
+                  <span
+                    style={{
+                      color: '#198754',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Usage Status: Not used yet
+                  </span>
+                ) : null}
+
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' }}>
+                  {item.pdf_path && (
+                    <a
+                      href={`${API_BASE_URL}${item.pdf_path}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: '#198754', fontWeight: 700 }}
+                    >
+                      Open Generated PDF
+                    </a>
+                  )}
+
+                  {item.qr_code_path && (
+                    <a
+                      href={`${API_BASE_URL}${item.qr_code_path}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: '#198754', fontWeight: 700 }}
+                    >
+                      Open QR Code
+                    </a>
+                  )}
+                </div>
 
                 {user?.role === 'admin' && item.status === 'pending' && (
                   <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                    <button type="button" onClick={() => handleAdminAction(item.id, 'approve')}>
-                      Approve
+                    <button
+                      type="button"
+                      onClick={() => handleAdminAction(item.id, 'approve')}
+                      disabled={actionLoadingId === item.id}
+                    >
+                      {actionLoadingId === item.id ? 'Processing...' : 'Approve'}
                     </button>
+
                     <button
                       type="button"
                       onClick={() => handleAdminAction(item.id, 'reject')}
+                      disabled={actionLoadingId === item.id}
                       style={{ background: '#dc3545' }}
                     >
-                      Reject
+                      {actionLoadingId === item.id ? 'Processing...' : 'Reject'}
                     </button>
                   </div>
                 )}
@@ -255,6 +358,3 @@ export default function GatePassPage() {
     </div>
   )
 }
-
-
-
