@@ -10,7 +10,7 @@
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Functional%20Prototype-success?style=for-the-badge)
 
-A full-stack hall management and automation platform for DIU hall operations, built with **FastAPI**, **PostgreSQL**, **React**, **Docker**, and a **retrieval-based AI assistant** for hall-rule queries.
+A full-stack hall management and automation platform for DIU hall operations, built with **FastAPI**, **PostgreSQL**, **React**, **Docker**, **QR-based gate-pass verification**, and a **retrieval-based AI assistant** for hall-rule queries.
 
 ---
 
@@ -25,10 +25,13 @@ A full-stack hall management and automation platform for DIU hall operations, bu
 - [Run with Docker](#run-with-docker)
 - [Run Manually](#run-manually)
 - [Environment Variables](#environment-variables)
+- [Database Migration Notes](#database-migration-notes)
 - [API Endpoints](#api-endpoints)
 - [Database Models](#database-models)
 - [AI Assistant / RAG Flow](#ai-assistant--rag-flow)
 - [Gate-Pass PDF Generation](#gate-pass-pdf-generation)
+- [Gate-Pass QR Verification Flow](#gate-pass-qr-verification-flow)
+- [Forgot Password Flow](#forgot-password-flow)
 - [Email Notifications](#email-notifications)
 - [Development Commands](#development-commands)
 - [Troubleshooting](#troubleshooting)
@@ -45,9 +48,14 @@ A full-stack hall management and automation platform for DIU hall operations, bu
 It allows students to:
 
 - Register and log in
+- Reset forgotten password through email
 - Manage their profile
 - Upload a signature
 - Submit gate-pass requests
+- View their own gate-pass requests
+- Download approved gate-pass PDFs
+- View generated verification ID
+- Check whether their gate pass is used or unused
 - View hall notices
 - Submit complaints
 - Receive in-app and optional email notifications
@@ -58,11 +66,25 @@ It allows admins to:
 - Review all gate-pass requests
 - Approve or reject gate-pass requests
 - Generate gate-pass PDFs
+- Generate QR codes for approved gate passes
 - Publish notices
 - View and update complaints
 - Manage hall rules
 - Rebuild the chatbot vector index
 - Test email notifications in development
+
+It allows gate security users to:
+
+- Log in through a dedicated Gate Security account
+- Access the Gate Security portal
+- Start the QR scanner manually
+- Stop the QR scanner manually
+- Scan approved gate-pass QR codes
+- Verify student gate-pass details
+- Confirm student exit
+- Mark a gate pass as used
+- Detect already-used gate passes
+- Manually verify a gate pass using verification ID
 
 The platform uses:
 
@@ -73,6 +95,9 @@ The platform uses:
 - **ChromaDB** for vector storage
 - **Sentence Transformers** for hall-rule semantic search
 - **ReportLab** for gate-pass PDF generation
+- **qrcode[pil]** for backend QR code generation
+- **html5-qrcode** for frontend QR scanning
+- **SMTP** for password reset and notification emails
 - **Docker Compose** for local containerized setup
 
 ---
@@ -104,12 +129,44 @@ Use `.env.example` for placeholder values only.
 
 ### Authentication and Authorization
 
-- Student and admin registration
-- Student and admin login
+- Student registration
+- Admin registration
+- Gate Security registration
+- Student login
+- Admin login
+- Gate Security login
 - JWT-based authentication
 - Current-user endpoint
 - Role-based access control
+- Protected student operations
 - Protected admin operations
+- Protected gate-security operations
+- Forgot Password flow
+- Password reset through email
+
+Supported roles:
+
+```text
+student
+admin
+gate_security
+```
+
+### Forgot Password
+
+- Login page includes a **Forgot Password?** option
+- User enters account email
+- Backend generates password reset token
+- Backend sends reset email
+- Email contains a **Reset Password** button
+- Reset link opens frontend reset page
+- User enters:
+  - Email address
+  - New password
+  - Confirm new password
+- Backend verifies token and email
+- Password hash is updated
+- User can log in with the new password
 
 ### Profile and Signature Upload
 
@@ -120,6 +177,7 @@ Use `.env.example` for placeholder values only.
   - `.jpeg`
 - Uploaded signatures are stored under backend uploads
 - Student signature is required before an approved gate-pass PDF can be generated
+- Admin signature is required before approving or rejecting gate-pass requests
 
 ### Gate-Pass Management
 
@@ -129,20 +187,50 @@ Use `.env.example` for placeholder values only.
 - Admins can approve requests
 - Admins can reject requests
 - Approved requests generate a PDF gate pass
-- Gate-pass PDF includes:
-  - Gate-pass number
-  - Student name
-  - Student ID
-  - Room number
-  - Guardian phone
-  - Leave date
-  - Return date
-  - Reason
-  - Item/details
-  - Approval information
-  - Student signature
-  - Admin signature asset
-  - Checker signature asset
+- Approved requests generate a unique verification ID
+- Approved requests generate a QR code
+- QR code is placed at the bottom-right of the gate-pass PDF
+- Gate pass can be used only once
+- Already-used gate pass cannot be reused
+
+Gate-pass PDF includes:
+
+- Gate-pass number
+- Student name
+- Student ID
+- Room number
+- Guardian phone
+- Leave date
+- Return date
+- Reason
+- Item/details
+- Approval information
+- Student signature
+- Admin signature
+- Checker signature asset
+- QR code
+- Verification ID
+- Scan-to-verify label
+
+### Gate Security Portal
+
+- Gate Security user has a separate portal
+- Camera does not start automatically
+- Scanner starts only after clicking **Start Scan**
+- Scanner can be stopped by clicking **Stop Scan**
+- Scanner stops automatically after successful QR detection
+- Gate Security can also manually enter verification ID
+- Valid gate pass shows full student and gate-pass details
+- Security guard must click **Confirm Exit**
+- Confirm Exit marks the pass as used
+- Scanning the same QR again shows **Already Used**
+
+Important rule:
+
+```text
+Scanning only verifies the gate pass.
+Confirm Exit marks the gate pass as used.
+```
 
 ### Notice Board
 
@@ -171,6 +259,7 @@ Use `.env.example` for placeholder values only.
   - `gate_pass`
   - `notice`
   - `complaint`
+  - `hall_rule`
 
 ### Hall Rule Management
 
@@ -189,6 +278,7 @@ Use `.env.example` for placeholder values only.
 - Uses Sentence Transformers for embeddings
 - Uses ChromaDB as the vector store
 - Returns matched hall-rule sources with the answer
+- Supports chat sessions and chat history
 
 ---
 
@@ -197,6 +287,7 @@ Use `.env.example` for placeholder values only.
 | Layer | Technologies |
 |---|---|
 | Frontend | React, Vite, React Router DOM |
+| QR Scanner | html5-qrcode |
 | Backend | Python, FastAPI, Uvicorn |
 | Database | PostgreSQL |
 | ORM | SQLAlchemy |
@@ -205,6 +296,7 @@ Use `.env.example` for placeholder values only.
 | AI Retrieval | Sentence Transformers, Transformers, ChromaDB |
 | Vector Model Runtime | Torch CPU |
 | PDF Generation | ReportLab |
+| QR Generation | qrcode[pil] |
 | Email | SMTP |
 | Containerization | Docker, Docker Compose |
 | Static Files | FastAPI StaticFiles |
@@ -214,63 +306,65 @@ Use `.env.example` for placeholder values only.
 ## System Architecture
 
 ```text
-┌───────────────────────────────────────────────────────────────┐
-│                         User Layer                            │
-│                                                               │
-│  ┌─────────────────────┐        ┌─────────────────────┐       │
-│  │       Student       │        │        Admin        │       │
-│  │                     │        │                     │       │
-│  │ - Register/Login    │        │ - Manage notices    │       │
-│  │ - Upload signature  │        │ - Manage complaints │       │
-│  │ - Request gate pass │        │ - Approve passes    │       │
-│  │ - Submit complaint  │        │ - Manage rules      │       │
-│  │ - View notices      │        │ - Rebuild index     │       │
-│  │ - Use chatbot       │        │ - Test email        │       │
-│  └──────────┬──────────┘        └──────────┬──────────┘       │
-└─────────────┼──────────────────────────────┼──────────────────┘
-              │                              │
-              ▼                              ▼
-┌───────────────────────────────────────────────────────────────┐
-│                       Frontend Layer                          │
-│                                                               │
-│                    React + Vite SPA                           │
-│                                                               │
-│  Pages: Login, Register, Dashboard, Profile, Gate Pass,        │
-│  Notice Board, Complaints, Chatbot, Admin Rule Management      │
-└───────────────────────────────┬───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                             User Layer                              │
+│                                                                     │
+│  ┌─────────────────────┐ ┌─────────────────────┐ ┌───────────────┐ │
+│  │       Student       │ │        Admin        │ │ Gate Security │ │
+│  │                     │ │                     │ │               │ │
+│  │ - Register/Login    │ │ - Manage notices    │ │ - Login       │ │
+│  │ - Upload signature  │ │ - Manage complaints │ │ - Scan QR     │ │
+│  │ - Request gate pass │ │ - Approve passes    │ │ - Verify pass │ │
+│  │ - Submit complaint  │ │ - Manage rules      │ │ - Confirm use │ │
+│  │ - View notices      │ │ - Rebuild index     │ │ - Check used  │ │
+│  │ - Use chatbot       │ │ - Test email        │ │               │ │
+│  └──────────┬──────────┘ └──────────┬──────────┘ └───────┬───────┘ │
+└─────────────┼───────────────────────┼────────────────────┼─────────┘
+              │                       │                    │
+              ▼                       ▼                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Frontend Layer                             │
+│                                                                     │
+│                         React + Vite SPA                            │
+│                                                                     │
+│ Pages: Login, Register, Forgot Password, Reset Password, Dashboard, │
+│ Profile, Gate Pass, Gate Security, Notice Board, Complaints,        │
+│ Chatbot, Admin Rule Management                                      │
+└───────────────────────────────┬─────────────────────────────────────┘
                                 │
                                 │ REST API + JWT Bearer Token
                                 ▼
-┌───────────────────────────────────────────────────────────────┐
-│                        Backend Layer                          │
-│                                                               │
-│                         FastAPI API                           │
-│                                                               │
-│  Modules: Auth, Users, Gate Passes, Notices, Notifications,    │
-│  Complaints, Hall Rules, Chatbot, PDF Generation               │
-└───────────────┬───────────────────────────────┬───────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Backend Layer                             │
+│                                                                     │
+│                            FastAPI API                              │
+│                                                                     │
+│ Modules: Auth, Users, Gate Passes, Gate Security, Notices,          │
+│ Notifications, Complaints, Hall Rules, Chatbot, PDF Generation,     │
+│ QR Generation, Email                                                │
+└───────────────┬───────────────────────────────┬─────────────────────┘
                 │                               │
                 ▼                               ▼
-┌──────────────────────────────┐     ┌─────────────────────────┐
-│       PostgreSQL DB          │     │      Upload Storage      │
-│                              │     │                         │
-│ - users                      │     │ - User signatures        │
-│ - gate_passes                │     │ - Gate-pass PDFs         │
-│ - notices                    │     │ - Signature assets       │
-│ - complaints                 │     └─────────────────────────┘
-│ - notifications              │
+┌──────────────────────────────┐     ┌───────────────────────────────┐
+│        PostgreSQL DB          │     │        Upload Storage          │
+│                              │     │                               │
+│ - users                      │     │ - User signatures              │
+│ - gate_passes                │     │ - Gate-pass PDFs               │
+│ - notices                    │     │ - Gate-pass QR codes           │
+│ - complaints                 │     │ - Signature assets             │
+│ - notifications              │     └───────────────────────────────┘
 │ - hall_rules                 │
 │ - chat_sessions              │
 │ - chat_messages              │
 └───────────────┬──────────────┘
                 │
                 ▼
-┌───────────────────────────────────────────────────────────────┐
-│                         AI / RAG Layer                        │
-│                                                               │
-│  Hall Rules JSON → PostgreSQL → Sentence Transformer           │
-│  Embeddings → ChromaDB → Retrieval → Chatbot Answer            │
-└───────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                            AI / RAG Layer                           │
+│                                                                     │
+│ Hall Rules JSON → PostgreSQL → Sentence Transformer Embeddings      │
+│ → ChromaDB → Retrieval → Chatbot Answer                             │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -278,7 +372,7 @@ Use `.env.example` for placeholder values only.
 ## Project Structure
 
 ```text
-DIU-Hall-AI-Assistant
+DIU_Hall_AI_Assistant_and_Automation_Platfrom
 │
 ├── backend
 │   ├── app
@@ -321,8 +415,14 @@ DIU-Hall-AI-Assistant
 │   │
 │   ├── assets
 │   │   └── signatures
+│   │       └── checker_signature.png
 │   │
 │   ├── uploads
+│   │   ├── signatures
+│   │   │   └── students
+│   │   ├── gate_pass_pdfs
+│   │   └── gate_pass_qr_codes
+│   │
 │   ├── Dockerfile
 │   └── requirements.txt
 │
@@ -336,11 +436,14 @@ DIU-Hall-AI-Assistant
 │   │   │   ├── ChatbotPage.jsx
 │   │   │   ├── ComplaintsPage.jsx
 │   │   │   ├── Dashboard.jsx
+│   │   │   ├── ForgotPasswordPage.jsx
 │   │   │   ├── GatePassPage.jsx
+│   │   │   ├── GateSecurityPage.jsx
 │   │   │   ├── LoginPage.jsx
 │   │   │   ├── NoticeBoardPage.jsx
 │   │   │   ├── ProfilePage.jsx
-│   │   │   └── RegisterPage.jsx
+│   │   │   ├── RegisterPage.jsx
+│   │   │   └── ResetPasswordPage.jsx
 │   │   │
 │   │   ├── App.jsx
 │   │   ├── main.jsx
@@ -349,10 +452,12 @@ DIU-Hall-AI-Assistant
 │   ├── Dockerfile
 │   ├── index.html
 │   ├── package.json
+│   ├── package-lock.json
 │   └── vite.config.js
 │
 ├── docker-compose.yml
 ├── README.md
+├── .env.example
 └── .gitignore
 ```
 
@@ -368,6 +473,7 @@ Install the following before running the project:
 - Node.js 20+ if running the frontend manually
 - Python 3.12+ if running the backend manually
 - PostgreSQL if running without Docker
+- pgAdmin 4 optionally, for manual database queries
 
 ---
 
@@ -376,8 +482,8 @@ Install the following before running the project:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/mehedi77k/DIU-Hall-AI-Assistant.git
-cd DIU-Hall-AI-Assistant
+git clone https://github.com/mehedi77k/DIU_Hall_AI_Assistant_and_Automation_Platfrom.git
+cd DIU_Hall_AI_Assistant_and_Automation_Platfrom
 ```
 
 ### 2. Create a Local `.env` File
@@ -385,6 +491,13 @@ cd DIU-Hall-AI-Assistant
 Create a `.env` file in the project root.
 
 ```env
+DATABASE_URL=postgresql+psycopg://diu_user:diu_password@db:5432/diu_hall
+
+APP_NAME=DIU Hall AI Assistant and Automation Platform
+APP_ENV=development
+
+BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+
 EMAIL_NOTIFICATIONS_ENABLED=false
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
@@ -392,6 +505,25 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_FROM_EMAIL=
 SMTP_USE_TLS=true
+
+GROQ_API_KEY=
+GEMINI_API_KEY=
+
+GROQ_MODEL=llama-3.1-8b-instant
+GEMINI_MODEL=gemini-2.5-flash
+
+LLM_ENABLED=true
+LLM_TEMPERATURE=0.2
+LLM_MAX_OUTPUT_TOKENS=500
+
+PUBLIC_BACKEND_URL=http://localhost:8000
+PUBLIC_FRONTEND_URL=http://localhost:5173
+
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30
+
+BACKEND_PORT=8000
+FRONTEND_PORT=5173
+DB_PORT=55432
 ```
 
 For Gmail SMTP, use a Gmail App Password instead of your normal Gmail password.
@@ -447,8 +579,8 @@ Use this method if you do not want to use Docker.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/mehedi77k/DIU-Hall-AI-Assistant.git
-cd DIU-Hall-AI-Assistant
+git clone https://github.com/mehedi77k/DIU_Hall_AI_Assistant_and_Automation_Platfrom.git
+cd DIU_Hall_AI_Assistant_and_Automation_Platfrom
 ```
 
 ### 2. Create PostgreSQL Database
@@ -476,6 +608,11 @@ SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_FROM_EMAIL=
 SMTP_USE_TLS=true
+
+PUBLIC_BACKEND_URL=http://localhost:8000
+PUBLIC_FRONTEND_URL=http://localhost:5173
+
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30
 
 ANONYMIZED_TELEMETRY=False
 ```
@@ -508,6 +645,12 @@ pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
+If QR generation package is missing:
+
+```bash
+pip install "qrcode[pil]"
+```
+
 ### 5. Run the Backend
 
 ```bash
@@ -527,6 +670,12 @@ Open a new terminal:
 ```bash
 cd frontend
 npm install
+```
+
+If QR scanner package is missing:
+
+```bash
+npm install html5-qrcode
 ```
 
 ### 7. Run the Frontend
@@ -558,7 +707,62 @@ http://localhost:5173
 | `SMTP_PASSWORD` | SMTP password or app password | `your_app_password` |
 | `SMTP_FROM_EMAIL` | Sender email | `example@gmail.com` |
 | `SMTP_USE_TLS` | Enable TLS for SMTP | `true` |
+| `PUBLIC_BACKEND_URL` | Backend public URL | `http://localhost:8000` |
+| `PUBLIC_FRONTEND_URL` | Frontend public URL | `http://localhost:5173` |
+| `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | Password reset token expiry | `30` |
+| `GROQ_API_KEY` | Groq API key | empty |
+| `GEMINI_API_KEY` | Gemini API key | empty |
+| `GROQ_MODEL` | Groq model | `llama-3.1-8b-instant` |
+| `GEMINI_MODEL` | Gemini model | `gemini-2.5-flash` |
+| `LLM_ENABLED` | Enable LLM generation | `true` |
+| `LLM_TEMPERATURE` | LLM temperature | `0.2` |
+| `LLM_MAX_OUTPUT_TOKENS` | Max output tokens | `500` |
 | `ANONYMIZED_TELEMETRY` | Disable Chroma telemetry | `False` |
+
+---
+
+## Database Migration Notes
+
+This project currently uses:
+
+```text
+Base.metadata.create_all(bind=engine)
+```
+
+This creates new tables, but it does not automatically add new columns to existing tables.
+
+If your database already exists and you added QR verification fields, run this SQL manually in pgAdmin 4 Query Tool or terminal.
+
+```sql
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS verification_id VARCHAR(80);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ix_gate_passes_verification_id
+ON gate_passes (verification_id);
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS qr_code_path VARCHAR(255);
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS used_at TIMESTAMP;
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS used_by_security_id INTEGER;
+```
+
+Using Docker terminal:
+
+```bash
+docker compose exec db psql -U diu_user -d diu_hall
+```
+
+Then paste the SQL.
+
+Exit psql:
+
+```sql
+\q
+```
 
 ---
 
@@ -581,9 +785,73 @@ http://localhost:8000
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth/register` | Register a student or admin |
+| `POST` | `/api/v1/auth/register` | Register student, admin, or gate security |
 | `POST` | `/api/v1/auth/login` | Log in and receive a JWT |
 | `GET` | `/api/v1/auth/me` | Get current authenticated user |
+| `POST` | `/api/v1/auth/forgot-password` | Request password reset email |
+| `POST` | `/api/v1/auth/reset-password` | Reset password using reset token |
+
+Register role values:
+
+```text
+student
+admin
+gate_security
+```
+
+Student register example:
+
+```json
+{
+  "full_name": "Mehedi Hasan",
+  "student_id": "241-50-001",
+  "email": "student@example.com",
+  "phone": "01700000000",
+  "password": "123456",
+  "role": "student"
+}
+```
+
+Gate Security register example:
+
+```json
+{
+  "full_name": "Gate Security 1",
+  "student_id": "SEC-001",
+  "email": "security@example.com",
+  "phone": "01700000000",
+  "password": "123456",
+  "role": "gate_security"
+}
+```
+
+Login example:
+
+```json
+{
+  "email": "student@example.com",
+  "password": "123456"
+}
+```
+
+Forgot password example:
+
+```json
+{
+  "email": "student@example.com"
+}
+```
+
+Reset password example:
+
+```json
+{
+  "email": "student@example.com",
+  "token": "reset-token-here",
+  "new_password": "123456",
+  "confirm_new_password": "123456"
+}
+```
 
 ### User Profile
 
@@ -597,8 +865,82 @@ http://localhost:8000
 |---|---|---|---|
 | `GET` | `/api/v1/gate-passes` | Student/Admin | List gate passes |
 | `POST` | `/api/v1/gate-passes` | Student | Submit a gate-pass request |
-| `POST` | `/api/v1/gate-passes/{gate_pass_id}/approve` | Admin | Approve a request and generate PDF |
+| `POST` | `/api/v1/gate-passes/{gate_pass_id}/approve` | Admin | Approve a request, generate QR, and generate PDF |
 | `POST` | `/api/v1/gate-passes/{gate_pass_id}/reject` | Admin | Reject a request |
+
+Gate pass submit example:
+
+```json
+{
+  "room_no": "NB-416",
+  "leave_date": "2026-05-02",
+  "return_date": "2026-05-14",
+  "guardian_phone": "01723857881",
+  "reason": "Eid vacation",
+  "item_list": "Bag, laptop"
+}
+```
+
+### Gate Security
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/gate-security/gate-pass/{verification_id}` | Gate Security | Verify scanned or manual gate pass |
+| `POST` | `/api/v1/gate-security/gate-pass/{verification_id}/use` | Gate Security | Mark gate pass as used |
+
+Possible verification statuses:
+
+```text
+valid
+used
+already_used
+invalid
+not_approved
+```
+
+Valid response example:
+
+```json
+{
+  "status": "valid",
+  "message": "Gate pass is valid.",
+  "gate_pass": {
+    "id": 8,
+    "verification_id": "GP-0008-98D79EC0A5EE",
+    "student_name": "Mehedi Hasan",
+    "student_id": "241-50-001",
+    "room_no": "NB-416",
+    "leave_date": "2026-05-02",
+    "return_date": "2026-05-14",
+    "guardian_phone": "01723857881",
+    "reason": "Eid vacation",
+    "item_list": "Bag",
+    "status": "approved",
+    "approved_by": "Admin Name",
+    "pdf_path": "/uploads/gate_pass_pdfs/gate_pass_8_20260509_160900.pdf",
+    "used_at": null,
+    "used_by_security_id": null,
+    "created_at": "2026-05-09T16:09:00"
+  }
+}
+```
+
+Already used response example:
+
+```json
+{
+  "status": "already_used",
+  "message": "This gate pass has already been used.",
+  "gate_pass": {
+    "id": 8,
+    "verification_id": "GP-0008-98D79EC0A5EE",
+    "student_name": "Mehedi Hasan",
+    "student_id": "241-50-001",
+    "used_at": "2026-05-09T18:20:00",
+    "used_by_security_id": 4
+  }
+}
+```
 
 ### Notices
 
@@ -644,13 +986,19 @@ rejected
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/chat` | Public/API-level | Ask a hall-rule question |
+| `GET` | `/api/v1/chat/sessions` | Authenticated | List chat sessions |
+| `POST` | `/api/v1/chat/sessions` | Authenticated | Create chat session |
+| `PATCH` | `/api/v1/chat/sessions/{session_id}` | Authenticated | Rename chat session |
+| `DELETE` | `/api/v1/chat/sessions/{session_id}` | Authenticated | Delete chat session |
+| `GET` | `/api/v1/chat/sessions/{session_id}/messages` | Authenticated | List chat messages |
+| `POST` | `/api/v1/chat` | Authenticated | Ask a hall-rule question |
 
 Example request:
 
 ```json
 {
-  "message": "What is rule 5?"
+  "message": "What is rule 5?",
+  "session_id": 1
 }
 ```
 
@@ -658,6 +1006,7 @@ Example response:
 
 ```json
 {
+  "session_id": 1,
   "answer": "According to Rule 5...",
   "matched_rules": [
     {
@@ -691,16 +1040,16 @@ Example request:
 
 ### `users`
 
-Stores student and admin account data.
+Stores student, admin, and gate-security account data.
 
 | Field | Description |
 |---|---|
 | `id` | Primary key |
 | `full_name` | User full name |
-| `student_id` | Student/admin ID |
+| `student_id` | Student/admin/security ID |
 | `email` | Unique email |
 | `phone` | Optional phone number |
-| `role` | `student` or `admin` |
+| `role` | `student`, `admin`, or `gate_security` |
 | `password_hash` | Hashed password |
 | `signature_image_path` | Uploaded signature path |
 | `is_active` | Account active status |
@@ -708,7 +1057,7 @@ Stores student and admin account data.
 
 ### `gate_passes`
 
-Stores gate-pass requests.
+Stores gate-pass requests, QR verification data, and usage tracking.
 
 | Field | Description |
 |---|---|
@@ -724,6 +1073,10 @@ Stores gate-pass requests.
 | `status` | `pending`, `approved`, or `rejected` |
 | `approved_by` | Admin who approved |
 | `pdf_path` | Generated PDF path |
+| `verification_id` | Unique QR verification ID |
+| `qr_code_path` | Generated QR image path |
+| `used_at` | Time when gate pass was confirmed as used |
+| `used_by_security_id` | Gate Security user ID who confirmed exit |
 | `created_at` | Request creation time |
 
 ### `notices`
@@ -766,6 +1119,9 @@ Stores in-app notifications.
 | `message` | Notification message |
 | `category` | Notification category |
 | `is_read` | Read/unread status |
+| `entity_type` | Related entity type |
+| `entity_id` | Related entity ID |
+| `action_url` | Frontend deep link |
 | `created_at` | Notification creation time |
 
 ### `hall_rules`
@@ -785,7 +1141,7 @@ Stores hall rules used by the chatbot.
 
 ### `chat_sessions` and `chat_messages`
 
-These models exist in the backend codebase for chat persistence, but the current API implementation exposes only the main `/api/v1/chat` endpoint.
+These models store user chatbot sessions and messages.
 
 ---
 
@@ -845,6 +1201,12 @@ Generated PDFs are stored under:
 backend/uploads/gate_pass_pdfs
 ```
 
+Generated QR codes are stored under:
+
+```text
+backend/uploads/gate_pass_qr_codes
+```
+
 Uploaded user signatures are stored under:
 
 ```text
@@ -860,11 +1222,95 @@ backend/assets/signatures
 Expected asset files:
 
 ```text
-admin_signature.png
 checker_signature.png
 ```
 
-The generated PDF includes student information, leave details, approval details, and signature boxes.
+The generated PDF includes student information, leave details, approval details, signature boxes, QR code, and verification ID.
+
+---
+
+## Gate-Pass QR Verification Flow
+
+```text
+Student submits gate pass request
+        ↓
+Admin approves request
+        ↓
+System generates verification_id
+        ↓
+System generates QR code
+        ↓
+System generates PDF with QR code
+        ↓
+Student downloads/prints PDF
+        ↓
+Student shows PDF to gate security
+        ↓
+Gate Security opens portal
+        ↓
+Gate Security clicks Start Scan
+        ↓
+Gate Security scans QR code
+        ↓
+System shows gate-pass details
+        ↓
+Gate Security clicks Confirm Exit
+        ↓
+System sets used_at and used_by_security_id
+        ↓
+Same QR scanned again shows Already Used
+```
+
+QR content format:
+
+```text
+http://localhost:5173/gate-security/verify/<verification_id>
+```
+
+Example:
+
+```text
+http://localhost:5173/gate-security/verify/GP-0008-98D79EC0A5EE
+```
+
+Security rule:
+
+```text
+Scanning verifies only.
+Confirm Exit marks the gate pass as used.
+```
+
+---
+
+## Forgot Password Flow
+
+```text
+User clicks Forgot Password
+        ↓
+User enters email
+        ↓
+Backend creates password reset token
+        ↓
+Backend sends reset email
+        ↓
+User clicks Reset Password button
+        ↓
+Frontend reset page opens
+        ↓
+User enters email, new password, confirm password
+        ↓
+Backend verifies token
+        ↓
+Backend updates password
+        ↓
+User logs in with new password
+```
+
+Reset link format:
+
+```text
+http://localhost:5173/reset-password?token=<token>&email=<email>
+```
 
 ---
 
@@ -883,6 +1329,16 @@ For local development, disable email notifications unless SMTP is configured:
 ```env
 EMAIL_NOTIFICATIONS_ENABLED=false
 ```
+
+Email is used for:
+
+- Password reset
+- Gate-pass approval
+- Gate-pass rejection
+- Notice notification
+- Complaint status update
+- Hall rule update
+- Development test email
 
 ### Gmail SMTP Setup
 
@@ -986,12 +1442,30 @@ cd backend
 pip install -r requirements.txt
 ```
 
+Install QR package manually:
+
+```bash
+pip install "qrcode[pil]"
+```
+
 ### Frontend
 
 ```bash
 cd frontend
 npm install
 npm run dev
+```
+
+Install QR scanner package:
+
+```bash
+npm install html5-qrcode
+```
+
+Check QR package:
+
+```bash
+npm list html5-qrcode
 ```
 
 Build frontend:
@@ -1069,6 +1543,23 @@ Confirm CORS includes the frontend origin:
 BACKEND_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
 ```
 
+### Frontend Opens Dashboard Instead of Login
+
+Old login data may exist in browser storage.
+
+Open browser console and run:
+
+```js
+localStorage.clear()
+sessionStorage.clear()
+```
+
+Then reload:
+
+```text
+http://localhost:5173
+```
+
 ### Chatbot Returns No Relevant Answer
 
 Check that:
@@ -1087,8 +1578,90 @@ Check that:
 - Gate-pass request exists.
 - Student account exists.
 - Student has uploaded a signature.
+- Admin has uploaded a signature.
 - Upload directories are writable.
 - Signature assets exist if required for PDF rendering.
+- `qrcode[pil]` is installed.
+- Database has QR-related columns.
+
+### QR Code Is Not Showing in PDF
+
+Check that:
+
+- `qrcode[pil]` is installed.
+- `verification_id` exists.
+- `qr_code_path` exists.
+- QR image exists in `uploads/gate_pass_qr_codes`.
+- PDF was generated after QR code generation.
+- Old PDFs need regeneration.
+
+### Gate Security Camera Opens Automatically
+
+Expected behavior:
+
+```text
+Page reload → Scanner off
+Click Start Scan → Camera on
+Click Stop Scan → Camera off
+QR detected → Scanner stops automatically
+```
+
+If camera opens automatically, check `GateSecurityPage.jsx`. It should use:
+
+```text
+Html5Qrcode
+```
+
+not:
+
+```text
+Html5QrcodeScanner
+```
+
+### Gate Security Cannot Verify QR
+
+Check that:
+
+- Gate Security user is logged in.
+- User role is exactly `gate_security`.
+- Gate pass is approved.
+- `verification_id` exists.
+- Backend is running.
+- Token exists in browser session.
+- QR contains correct verification URL.
+
+### Gate Pass Shows Already Used
+
+This is expected if the security guard already clicked **Confirm Exit**.
+
+The system prevents using the same gate pass more than once.
+
+### Missing Database Columns
+
+If backend shows:
+
+```text
+column gate_passes.verification_id does not exist
+```
+
+Run:
+
+```sql
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS verification_id VARCHAR(80);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ix_gate_passes_verification_id
+ON gate_passes (verification_id);
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS qr_code_path VARCHAR(255);
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS used_at TIMESTAMP;
+
+ALTER TABLE gate_passes
+ADD COLUMN IF NOT EXISTS used_by_security_id INTEGER;
+```
 
 ### Email Notifications Are Not Sent
 
@@ -1116,20 +1689,27 @@ Before using this project in production:
 
 - Remove `.env` from Git tracking.
 - Never commit real credentials.
-- Use a strong JWT secret.
+- Rotate any exposed API keys or SMTP passwords.
+- Use a strong JWT secret from environment variables.
 - Restrict CORS to trusted frontend domains.
 - Use HTTPS.
 - Disable development reload mode.
 - Validate uploaded files carefully.
 - Add upload file-size limits.
 - Restrict admin registration.
+- Restrict gate-security registration.
+- Create admin/security users from admin-only flow.
 - Use proper database migrations, such as Alembic.
 - Store SMTP credentials securely.
 - Use a transactional email provider for production.
 - Protect generated PDF download routes.
+- Protect QR image download routes if needed.
 - Back up PostgreSQL data.
 - Back up uploaded signatures and generated PDFs.
-- Review authorization checks for all admin routes.
+- Review authorization checks for all admin and gate-security routes.
+- Add rate limiting for login and forgot-password endpoints.
+- Make password reset tokens one-time-use in production.
+- Add audit logs for Gate Security actions.
 
 ---
 
@@ -1137,12 +1717,15 @@ Before using this project in production:
 
 - The system currently uses startup-based table creation instead of formal migrations.
 - Existing database schemas may require manual updates when models change.
-- The AI assistant is retrieval-based, not a generative LLM.
-- Chatbot answer quality depends on the hall-rule dataset.
+- Password reset token is JWT-based, not a one-time database token.
+- Admin registration may be open during development.
+- Gate Security registration may be open during development.
+- Old PDFs do not automatically get QR codes.
+- QR and PDF files are stored locally.
+- The AI assistant quality depends on the hall-rule dataset.
 - Vector model loading can increase backend startup time.
 - SMTP delivery depends on external email-provider configuration.
 - Generated PDFs and uploads are served from local static storage in development.
-- Chat session models exist, but the current API exposes only the main chat endpoint.
 - Production deployment requires additional hardening.
 
 ---
@@ -1151,21 +1734,23 @@ Before using this project in production:
 
 - Alembic database migrations
 - Protected admin registration
+- Gate Security account creation by admin
 - Dedicated admin seeding command
-- Password reset flow
+- One-time password reset token table
 - Email verification
-- Gate-pass QR code verification
+- Gate-pass QR scan history
+- Gate-pass regenerate PDF endpoint
 - Protected PDF download endpoint
+- Protected QR download endpoint
 - Gate-pass download history
 - Complaint priority levels
 - Complaint comments or admin notes
-- Chat session API endpoints
-- Persistent user-specific chatbot history
 - Real-time notifications with WebSocket
 - Notification deep links
 - Notification delivery tracking
 - Email retry queue with Celery or RQ
 - Admin analytics dashboard
+- Gate Security activity log
 - Hall occupancy management
 - Room allocation module
 - Visitor management module
@@ -1181,7 +1766,7 @@ Before using this project in production:
 ## Repository
 
 ```text
-https://github.com/mehedi77k/DIU-Hall-AI-Assistant
+https://github.com/mehedi77k/DIU_Hall_AI_Assistant_and_Automation_Platfrom
 ```
 
 ---
@@ -1198,4 +1783,8 @@ AI Layer: Sentence Transformers + ChromaDB
 Containerization: Docker Compose
 Notification System: In-app + Optional SMTP Email
 PDF Generation: ReportLab
+QR Generation: qrcode[pil]
+QR Scanner: html5-qrcode
+Authentication: JWT
+Roles: student, admin, gate_security
 ```
