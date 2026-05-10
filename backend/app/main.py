@@ -450,7 +450,12 @@ def draw_signature_box(
     pdf.drawString(x, y - 14, label)
 
 
-def draw_gate_pass_qr_box(pdf: canvas.Canvas, gate_pass: GatePass, page_width: float, margin_x: float):
+def draw_gate_pass_qr_box(
+    pdf: canvas.Canvas,
+    gate_pass: GatePass,
+    page_width: float,
+    margin_x: float,
+):
     qr_file = public_path_to_file(gate_pass.qr_code_path)
     qr_size = 30 * mm
 
@@ -964,6 +969,7 @@ def create_gate_pass(
         reason=payload.reason,
         item_list=payload.item_list,
         status="pending",
+        exit="No",
     )
 
     db.add(gate_pass)
@@ -1060,6 +1066,7 @@ def reject_gate_pass(
     gate_pass.status = "rejected"
     gate_pass.approved_by = None
     gate_pass.pdf_path = None
+    gate_pass.exit = "No"
 
     if student:
         notify_user(
@@ -1114,7 +1121,7 @@ def verify_gate_pass_for_security(
             gate_pass=gate_pass,
         )
 
-    if gate_pass.used_at is not None:
+    if gate_pass.used_at is not None or gate_pass.exit == "Yes":
         return GateSecurityVerificationResponse(
             status="already_used",
             message="This gate pass has already been used.",
@@ -1157,7 +1164,7 @@ def use_gate_pass_for_security(
             gate_pass=gate_pass,
         )
 
-    if gate_pass.used_at is not None:
+    if gate_pass.used_at is not None or gate_pass.exit == "Yes":
         return GateSecurityVerificationResponse(
             status="already_used",
             message="This gate pass has already been used.",
@@ -1166,6 +1173,7 @@ def use_gate_pass_for_security(
 
     gate_pass.used_at = datetime.utcnow()
     gate_pass.used_by_security_id = current_user.id
+    gate_pass.exit = "Yes"
 
     db.commit()
     db.refresh(gate_pass)

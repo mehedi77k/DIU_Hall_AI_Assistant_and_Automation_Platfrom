@@ -24,6 +24,11 @@ class GatePass(Base):
 
     status: Mapped[str] = mapped_column(String(20), default="pending")
 
+    # Exit tracking field
+    # Default: No
+    # After Gate Security clicks Confirm Exit: Yes
+    exit: Mapped[str] = mapped_column(String(10), default="No", nullable=False)
+
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

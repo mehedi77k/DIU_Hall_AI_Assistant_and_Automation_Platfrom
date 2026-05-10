@@ -47,6 +47,10 @@ function formatDateTime(value) {
   }
 }
 
+function hasStudentExited(item) {
+  return item.exit === 'Yes' || Boolean(item.used_at)
+}
+
 export default function GatePassPage() {
   const user = getStoredUser()
   const token = getStoredToken()
@@ -261,94 +265,98 @@ export default function GatePassPage() {
           <h3>{user?.role === 'admin' ? 'All Gate Pass Requests' : 'My Gate Pass Requests'}</h3>
 
           <div className="list-wrap">
-            {items.map((item) => (
-              <div key={item.id} className="list-item">
-                <strong>{item.student_name}</strong>
+            {items.map((item) => {
+              const exited = hasStudentExited(item)
 
-                <span>ID: {item.student_id}</span>
-                <span>Room: {item.room_no}</span>
-                <span>Leave: {item.leave_date}</span>
-                <span>Return: {item.return_date}</span>
-                <span>Guardian: {item.guardian_phone}</span>
-                <span>Reason: {item.reason}</span>
-                <span>Items: {item.item_list}</span>
+              return (
+                <div key={item.id} className="list-item">
+                  <strong>{item.student_name}</strong>
 
-                <span className={`status ${item.status}`}>{item.status}</span>
+                  <span>ID: {item.student_id}</span>
+                  <span>Room: {item.room_no}</span>
+                  <span>Leave: {item.leave_date}</span>
+                  <span>Return: {item.return_date}</span>
+                  <span>Guardian: {item.guardian_phone}</span>
+                  <span>Reason: {item.reason}</span>
+                  <span>Items: {item.item_list}</span>
 
-                {item.approved_by && <span>Approved by: {item.approved_by}</span>}
+                  <span className={`status ${item.status}`}>{item.status}</span>
 
-                {item.verification_id && (
-                  <span>
-                    <strong>Verification ID:</strong> {item.verification_id}
-                  </span>
-                )}
+                  {item.approved_by && <span>Approved by: {item.approved_by}</span>}
 
-                {item.used_at ? (
-                  <span
-                    style={{
-                      color: '#92400e',
-                      fontWeight: 700,
-                    }}
-                  >
-                    Already Used: {formatDateTime(item.used_at)}
-                  </span>
-                ) : item.status === 'approved' ? (
-                  <span
-                    style={{
-                      color: '#198754',
-                      fontWeight: 700,
-                    }}
-                  >
-                    Usage Status: Not used yet
-                  </span>
-                ) : null}
-
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' }}>
-                  {item.pdf_path && (
-                    <a
-                      href={`${API_BASE_URL}${item.pdf_path}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: '#198754', fontWeight: 700 }}
-                    >
-                      Open Generated PDF
-                    </a>
+                  {item.verification_id && (
+                    <span>
+                      <strong>Verification ID:</strong> {item.verification_id}
+                    </span>
                   )}
 
-                  {item.qr_code_path && (
-                    <a
-                      href={`${API_BASE_URL}${item.qr_code_path}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: '#198754', fontWeight: 700 }}
+                  <span
+                    style={{
+                      color: exited ? '#92400e' : '#198754',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Exit: {exited ? 'Yes' : 'No'}
+                  </span>
+
+                  {exited && (
+                    <span
+                      style={{
+                        color: '#92400e',
+                        fontWeight: 700,
+                      }}
                     >
-                      Open QR Code
-                    </a>
+                      Exit Time: {formatDateTime(item.used_at)}
+                    </span>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '8px' }}>
+                    {item.pdf_path && (
+                      <a
+                        href={`${API_BASE_URL}${item.pdf_path}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#198754', fontWeight: 700 }}
+                      >
+                        Open Generated PDF
+                      </a>
+                    )}
+
+                    {item.qr_code_path && (
+                      <a
+                        href={`${API_BASE_URL}${item.qr_code_path}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: '#198754', fontWeight: 700 }}
+                      >
+                        Open QR Code
+                      </a>
+                    )}
+                  </div>
+
+                  {user?.role === 'admin' && item.status === 'pending' && (
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAdminAction(item.id, 'approve')}
+                        disabled={actionLoadingId === item.id}
+                      >
+                        {actionLoadingId === item.id ? 'Processing...' : 'Approve'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleAdminAction(item.id, 'reject')}
+                        disabled={actionLoadingId === item.id}
+                        style={{ background: '#dc3545' }}
+                      >
+                        {actionLoadingId === item.id ? 'Processing...' : 'Reject'}
+                      </button>
+                    </div>
                   )}
                 </div>
-
-                {user?.role === 'admin' && item.status === 'pending' && (
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                    <button
-                      type="button"
-                      onClick={() => handleAdminAction(item.id, 'approve')}
-                      disabled={actionLoadingId === item.id}
-                    >
-                      {actionLoadingId === item.id ? 'Processing...' : 'Approve'}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleAdminAction(item.id, 'reject')}
-                      disabled={actionLoadingId === item.id}
-                      style={{ background: '#dc3545' }}
-                    >
-                      {actionLoadingId === item.id ? 'Processing...' : 'Reject'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
 
             {items.length === 0 && !error && <p>No gate pass requests found.</p>}
             {error && user?.role === 'student' && <p style={{ color: 'red' }}>{error}</p>}

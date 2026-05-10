@@ -24,6 +24,7 @@ class GatePassResponse(BaseModel):
     reason: str
     item_list: str
     status: str
+    exit: str = "No"
     approved_by: str | None = None
     pdf_path: str | None = None
 
@@ -50,6 +51,7 @@ class GateSecurityGatePassResponse(BaseModel):
     reason: str
     item_list: str
     status: str
+    exit: str = "No"
     approved_by: str | None = None
     pdf_path: str | None = None
     used_at: datetime | None = None

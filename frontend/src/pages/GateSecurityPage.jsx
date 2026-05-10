@@ -81,6 +81,10 @@ function getReadableStatus(status) {
   return status || 'Unknown'
 }
 
+function hasStudentExited(gatePass) {
+  return gatePass?.exit === 'Yes' || Boolean(gatePass?.used_at)
+}
+
 export default function GateSecurityPage() {
   const { verificationId } = useParams()
 
@@ -279,6 +283,7 @@ export default function GateSecurityPage() {
 
   const gatePass = result?.gate_pass || null
   const status = result?.status || ''
+  const exited = hasStudentExited(gatePass)
 
   return (
     <div>
@@ -405,6 +410,26 @@ export default function GateSecurityPage() {
                 <span>
                   <strong>Approved By:</strong> {gatePass.approved_by || 'N/A'}
                 </span>
+
+                <span
+                  style={{
+                    color: exited ? '#92400e' : '#198754',
+                    fontWeight: 700,
+                  }}
+                >
+                  <strong>Exit:</strong> {exited ? 'Yes' : 'No'}
+                </span>
+
+                {exited && (
+                  <span
+                    style={{
+                      color: '#92400e',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <strong>Exit Time:</strong> {formatDateTime(gatePass.used_at)}
+                  </span>
+                )}
 
                 <span>
                   <strong>Used At:</strong> {formatDateTime(gatePass.used_at)}
