@@ -1,0 +1,1997 @@
+import asyncio
+import json
+import shutil
+import textwrap
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlencode
+from uuid import uuid4
+
+import qrcode
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.dependencies import get_current_user, require_admin, require_gate_security
+from app.core.security import (
+    create_access_token,
+    create_password_reset_token,
+    decode_access_token,
+    decode_password_reset_token,
+    hash_password,
+    verify_password,
+)
+from app.db.base import Base
+from app.db.session import engine, get_db
+from app.db.seed_hall_rules import seed_hall_rules_from_json
+from app.models import (
+    ChatMessage,
+    ChatSession,
+    Complaint,
+    GatePass,
+    HallRule,
+    Notice,
+    Notification,
+    User,
+)
+from app.schemas.common import (
+    ChatMessageResponse,
+    ChatRenameRequest,
+    ChatResponse,
+    ChatSendRequest,
+    ChatSessionCreate,
+    ChatSessionResponse,
+    ComplaintCreate,
+    ComplaintResponse,
+    ComplaintStatusUpdate,
+    ForgotPasswordRequest,
+    GatePassCreate,
+    GatePassResponse,
+    GateSecurityVerificationResponse,
+    HallRuleCreate,
+    HallRuleResponse,
+    HallRuleUpdate,
+    MessageResponse,
+    NoticeCreate,
+    NoticeResponse,
+    NotificationResponse,
+    ResetPasswordRequest,
+    TestEmailRequest,
+    TokenResponse,
+    UserLogin,
+    UserRegister,
+    UserResponse,
+)
+from app.services.notifications import notify_user, send_email
+from app.services.realtime import realtime_manager
+from app.services.rag.answering import answer_question
+from app.services.rag.indexer import (
+    delete_rule_from_vector_db,
+    rebuild_vector_db,
+    upsert_rule_to_vector_db,
+)
+
+BASE_DIR = Path("/app")
+UPLOADS_DIR = BASE_DIR / "uploads"
+STUDENT_SIGNATURE_DIR = UPLOADS_DIR / "signatures" / "students"
+GATE_PASS_PDF_DIR = UPLOADS_DIR / "gate_pass_pdfs"
+GATE_PASS_QR_DIR = UPLOADS_DIR / "gate_pass_qr_codes"
+
+
+
+def ensure_directories():
+    STUDENT_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
+    GATE_PASS_PDF_DIR.mkdir(parents=True, exist_ok=True)
+    GATE_PASS_QR_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def public_path_to_file(public_path: str | None) -> Path | None:
+    if not public_path:
+        return None
+    return BASE_DIR / public_path.lstrip("/")
+
+
+def get_user_signature_file(user: User) -> Path | None:
+    return public_path_to_file(user.signature_image_path)
+
+
+def require_user_signature(user: User, message: str):
+    signature_file = get_user_signature_file(user)
+
+    if not user.signature_image_path or not signature_file or not signature_file.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=message,
+        )
+
+
+def wrap_lines(text: str, width: int = 80) -> list[str]:
+    if not text:
+        return ["-"]
+
+    lines = textwrap.wrap(text, width=width)
+    return lines if lines else ["-"]
+
+
+def build_chat_title(text: str) -> str:
+    title = text.strip()
+    if not title:
+        return "New chat"
+    return title[:46] + "..." if len(title) > 46 else title
+
+
+def parse_matched_rules(raw_value: str | None) -> list[dict]:
+    if not raw_value:
+        return []
+
+    try:
+        parsed = json.loads(raw_value)
+        return parsed if isinstance(parsed, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def build_frontend_url(path: str) -> str:
+    base_url = settings.public_frontend_url.rstrip("/")
+    clean_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url}{clean_path}"
+
+
+def build_backend_url(path: str) -> str:
+    base_url = settings.public_backend_url.rstrip("/")
+    clean_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url}{clean_path}"
+
+
+def generate_gate_pass_verification_id(gate_pass: GatePass) -> str:
+    return f"GP-{gate_pass.id:04d}-{uuid4().hex[:12].upper()}"
+
+
+def generate_gate_pass_qr_code(gate_pass: GatePass) -> str:
+    ensure_directories()
+
+    if not gate_pass.verification_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Gate pass verification ID is missing",
+        )
+
+    verify_url = build_frontend_url(
+        f"/gate-security/verify/{gate_pass.verification_id}"
+    )
+
+    safe_verification_id = gate_pass.verification_id.replace("/", "_")
+    filename = f"gate_pass_qr_{gate_pass.id}_{safe_verification_id}.png"
+    qr_file_path = GATE_PASS_QR_DIR / filename
+
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(verify_url)
+    qr.make(fit=True)
+
+    image = qr.make_image(fill_color="black", back_color="white")
+    image.save(qr_file_path)
+
+    return f"/uploads/gate_pass_qr_codes/{filename}"
+
+
+def build_password_reset_email_text(user: User, reset_url: str) -> str:
+    return f"""
+Dear {user.full_name},
+
+We received a request to reset your DIU Hall AI account password.
+
+Click this link to reset your password:
+{reset_url}
+
+This link will expire in {settings.password_reset_token_expire_minutes} minutes.
+
+If you did not request this, you can ignore this email.
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_password_reset_email_html(user: User, reset_url: str) -> str:
+    return f"""
+<!doctype html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+    <p>Dear {user.full_name},</p>
+
+    <p>We received a request to reset your DIU Hall AI account password.</p>
+
+    <p>
+      <a href="{reset_url}"
+         style="display: inline-block; background: #198754; color: #ffffff;
+                padding: 12px 18px; border-radius: 8px; text-decoration: none;
+                font-weight: 700;">
+        Reset Password
+      </a>
+    </p>
+
+    <p>This link will expire in {settings.password_reset_token_expire_minutes} minutes.</p>
+
+    <p>If you did not request this, you can ignore this email.</p>
+
+    <p>Regards,<br>DIU Hall Administration</p>
+  </body>
+</html>
+""".strip()
+
+
+def build_gate_pass_approved_email(
+    student: User,
+    gate_pass: GatePass,
+    approved_admin: User,
+) -> str:
+    gate_pass_page_url = build_frontend_url("/gate-pass")
+    pdf_url = (
+        build_backend_url(gate_pass.pdf_path)
+        if gate_pass.pdf_path
+        else gate_pass_page_url
+    )
+
+    verification_text = ""
+    if gate_pass.verification_id:
+        verification_text = f"""
+
+Verification ID:
+{gate_pass.verification_id}
+"""
+
+    return f"""
+Dear {student.full_name},
+
+Your gate pass request has been approved.
+
+Gate Pass ID: GP-{gate_pass.id:04d}
+Student ID: {gate_pass.student_id}
+Room No: {gate_pass.room_no}
+Leave Date: {gate_pass.leave_date}
+Return Date: {gate_pass.return_date}
+Approved By: {approved_admin.full_name}
+Approved At: {datetime.now().strftime("%Y-%m-%d %H:%M")}{verification_text}
+
+Download Gate Pass PDF:
+{pdf_url}
+
+You can also view your gate pass from the DIU Hall AI platform:
+{gate_pass_page_url}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_gate_pass_rejected_email(
+    student: User,
+    gate_pass: GatePass,
+) -> str:
+    gate_pass_page_url = build_frontend_url("/gate-pass")
+
+    return f"""
+Dear {student.full_name},
+
+Your gate pass request has been rejected.
+
+Gate Pass ID: GP-{gate_pass.id:04d}
+Student ID: {gate_pass.student_id}
+Room No: {gate_pass.room_no}
+Leave Date: {gate_pass.leave_date}
+Return Date: {gate_pass.return_date}
+
+Please check the DIU Hall AI platform or contact hall administration for more information.
+
+View Gate Pass Requests:
+{gate_pass_page_url}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_notice_email(student: User, notice: Notice) -> str:
+    return f"""
+Dear {student.full_name},
+
+A new hall notice has been posted.
+
+Title: {notice.title}
+
+{notice.content}
+
+View Notice Board:
+{build_frontend_url("/notices")}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_complaint_status_email(
+    student: User,
+    complaint: Complaint,
+    status: str,
+) -> str:
+    return f"""
+Dear {student.full_name},
+
+Your complaint status has been updated.
+
+Complaint ID: #{complaint.id}
+Category: {complaint.category}
+Room No: {complaint.room_no}
+Status: {status}
+
+View Complaints:
+{build_frontend_url("/complaints")}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def build_hall_rule_added_email(
+    user: User,
+    rule: HallRule,
+    added_by: User,
+) -> str:
+    chatbot_url = build_frontend_url("/chatbot")
+    rules_url = build_frontend_url("/admin/rules")
+
+    admin_note = ""
+    if user.role == "admin":
+        admin_note = f"""
+
+Admin Rule Management:
+{rules_url}
+"""
+
+    return f"""
+Dear {user.full_name},
+
+A new hall rule has been added to the DIU Hall AI platform.
+
+Rule Number: {rule.rule_number}
+Section: {rule.section}
+Page: {rule.page if rule.page is not None else "N/A"}
+Added By: {added_by.full_name}
+Added At: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+
+Rule Text:
+{rule.text}
+
+You can ask questions about this rule from the Hall Rules Chatbot:
+{chatbot_url}{admin_note}
+
+Regards,
+DIU Hall Administration
+""".strip()
+
+
+def notify_all_users_about_new_rule(
+    db: Session,
+    background_tasks: BackgroundTasks,
+    rule: HallRule,
+    added_by: User,
+):
+    recipients = (
+        db.query(User)
+        .filter(User.role.in_(["student", "admin"]))
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+
+    for recipient in recipients:
+        notify_user(
+            db=db,
+            background_tasks=background_tasks,
+            user=recipient,
+            title="New hall rule added",
+            message=f"Rule {rule.rule_number} has been added: {rule.section}",
+            category="hall_rule",
+            email_subject=f"New Hall Rule Added - Rule {rule.rule_number}",
+            email_body=build_hall_rule_added_email(
+                user=recipient,
+                rule=rule,
+                added_by=added_by,
+            ),
+            entity_type="hall_rule",
+            entity_id=rule.id,
+            action_url="/chatbot",
+        )
+
+
+def draw_signature_box(
+    pdf: canvas.Canvas,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    label: str,
+    image_path: Path | None,
+    fallback_text: str,
+):
+    """
+    Draw one compact signature box and place its label
+    centered directly underneath the box.
+    """
+    pdf.setStrokeColor(colors.HexColor("#1f2937"))
+    pdf.setLineWidth(0.7)
+    pdf.rect(x, y, w, h, stroke=1, fill=0)
+
+    horizontal_padding = 4
+    vertical_padding = 5
+
+    if image_path and image_path.exists():
+        try:
+            pdf.drawImage(
+                str(image_path),
+                x + horizontal_padding,
+                y + vertical_padding,
+                width=w - (2 * horizontal_padding),
+                height=h - (2 * vertical_padding),
+                preserveAspectRatio=True,
+                anchor="c",
+                mask="auto",
+            )
+        except Exception:
+            pdf.setFillColor(colors.black)
+            pdf.setFont("Times-Roman", 9)
+            pdf.drawCentredString(
+                x + (w / 2),
+                y + (h / 2) - 3,
+                fallback_text,
+            )
+    else:
+        pdf.setFillColor(colors.black)
+        pdf.setFont("Times-Roman", 9)
+        pdf.drawCentredString(
+            x + (w / 2),
+            y + (h / 2) - 3,
+            fallback_text,
+        )
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Times-Bold", 10)
+    pdf.drawCentredString(
+        x + (w / 2),
+        y - 14,
+        label,
+    )
+
+
+def draw_gate_pass_qr_box(
+    pdf: canvas.Canvas,
+    gate_pass: GatePass,
+    page_width: float,
+    margin_x: float,
+):
+    qr_file = public_path_to_file(gate_pass.qr_code_path)
+    qr_size = 30 * mm
+
+    qr_x = page_width - margin_x - qr_size - 8
+    qr_y = 35 * mm
+
+    if not qr_file or not qr_file.exists():
+        return
+
+    pdf.setStrokeColor(colors.HexColor("#0f5132"))
+    pdf.setLineWidth(0.7)
+    pdf.rect(
+        qr_x - 4,
+        qr_y - 4,
+        qr_size + 8,
+        qr_size + 20,
+        stroke=1,
+        fill=0,
+    )
+
+    pdf.drawImage(
+        str(qr_file),
+        qr_x,
+        qr_y,
+        width=qr_size,
+        height=qr_size,
+        preserveAspectRatio=True,
+        mask="auto",
+    )
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Times-Bold", 7)
+    pdf.drawCentredString(
+        qr_x + (qr_size / 2),
+        qr_y - 8,
+        "Scan to Verify",
+    )
+
+    pdf.setFont("Times-Roman", 6)
+    pdf.drawCentredString(
+        qr_x + (qr_size / 2),
+        qr_y - 16,
+        gate_pass.verification_id or "",
+    )
+
+
+def generate_gate_pass_pdf(
+    gate_pass: GatePass,
+    student: User,
+    approved_admin: User,
+) -> str:
+    ensure_directories()
+
+    filename = f"gate_pass_{gate_pass.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_file_path = GATE_PASS_PDF_DIR / filename
+
+    pdf = canvas.Canvas(str(pdf_file_path), pagesize=A4)
+    page_width, page_height = A4
+
+    margin_x = 18 * mm
+    top_y = page_height - (18 * mm)
+    content_width = page_width - (2 * margin_x)
+
+    pdf.setTitle(f"Gate Pass {gate_pass.id}")
+
+    pdf.setLineWidth(1)
+    pdf.setStrokeColor(colors.HexColor("#0f5132"))
+    pdf.rect(
+        margin_x,
+        18 * mm,
+        content_width,
+        page_height - (36 * mm),
+        stroke=1,
+        fill=0,
+    )
+
+    pdf.setFillColor(colors.HexColor("#0f5132"))
+    pdf.setFont("Times-Bold", 20)
+    title_y = top_y + (6 * mm)
+    pdf.drawCentredString(
+        margin_x + (content_width / 2),
+        title_y,
+        "DIU HALL Gate Pass",
+    )
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Times-Roman", 11)
+
+    header_box_top = top_y - 24
+    subtitle_y = header_box_top - 14
+    approved_y = subtitle_y - 14
+    header_box_bottom = approved_y - 8
+    header_box_height = header_box_top - header_box_bottom
+
+    pdf.setLineWidth(0.8)
+    pdf.setStrokeColor(colors.HexColor("#0f5132"))
+    pdf.rect(
+        margin_x + 6,
+        header_box_bottom,
+        content_width - 12,
+        header_box_height,
+        stroke=1,
+        fill=0,
+    )
+
+    pdf.drawString(
+        margin_x + 12,
+        subtitle_y,
+        "DIU Hall AI Assistant and Automation Platform",
+    )
+    pdf.drawRightString(
+        page_width - margin_x - 12,
+        subtitle_y,
+        f"Gate Pass No: GP-{gate_pass.id:04d}",
+    )
+    pdf.drawRightString(
+        page_width - margin_x - 12,
+        approved_y,
+        f"Approved Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+    )
+
+    y = header_box_bottom - 16
+
+    pdf.setLineWidth(0.5)
+    pdf.line(margin_x + 8, y, page_width - margin_x - 8, y)
+    y -= 18
+
+    pdf.setFont("Times-Bold", 14)
+    pdf.drawString(margin_x + 8, y, "Student Information")
+    y -= 18
+
+    fields = [
+        ("Student Name: ", gate_pass.student_name),
+        ("Student ID: ", gate_pass.student_id),
+        ("Room No: ", gate_pass.room_no),
+        ("Guardian Phone: ", gate_pass.guardian_phone),
+        ("Leave Date: ", str(gate_pass.leave_date)),
+        ("Return Date: ", str(gate_pass.return_date)),
+    ]
+
+    for label, value in fields:
+        pdf.setFont("Times-Bold", 12)
+        pdf.drawString(margin_x + 8, y, label)
+        label_width = pdf.stringWidth(label, "Times-Bold", 12)
+        pdf.setFont("Times-Roman", 12)
+        pdf.drawString(margin_x + 8 + label_width, y, value)
+        y -= 16
+
+    y -= 6
+
+    pdf.setFont("Times-Bold", 14)
+    pdf.drawString(margin_x + 8, y, "Reason")
+    y -= 18
+
+    pdf.setFont("Times-Roman", 12)
+    for line in wrap_lines(gate_pass.reason, width=90):
+        pdf.drawString(margin_x + 8, y, line)
+        y -= 15
+
+    y -= 8
+
+    pdf.setFont("Times-Bold", 14)
+    pdf.drawString(margin_x + 8, y, "Items / Details")
+    y -= 18
+
+    pdf.setFont("Times-Roman", 12)
+    for line in wrap_lines(gate_pass.item_list, width=90):
+        pdf.drawString(margin_x + 8, y, line)
+        y -= 15
+
+    y -= 15
+
+    pdf.setFont("Times-Bold", 14)
+    pdf.drawString(margin_x + 8, y, "Approval Information")
+    y -= 18
+
+    approval_fields = [
+        ("Status: ", gate_pass.status.upper()),
+        ("Approved By: ", approved_admin.full_name),
+    ]
+
+    for label, value in approval_fields:
+        pdf.setFont("Times-Bold", 12)
+        pdf.drawString(margin_x + 8, y, label)
+        label_width = pdf.stringWidth(label, "Times-Bold", 12)
+        pdf.setFont("Times-Roman", 12)
+        pdf.drawString(margin_x + 8 + label_width, y, value)
+        y -= 16
+
+    student_signature_file = public_path_to_file(student.signature_image_path)
+    admin_signature_file = public_path_to_file(approved_admin.signature_image_path)
+
+    # Compact two-box signature layout.
+    # Both boxes are centered together inside the PDF content area.
+    gap = 12 * mm
+    box_width = 62 * mm
+    box_height = 17 * mm
+    box_top_padding = 6 * mm
+
+    total_signature_width = (2 * box_width) + gap
+
+    y -= box_height + box_top_padding
+
+    first_x = margin_x + ((content_width - total_signature_width) / 2)
+    second_x = first_x + box_width + gap
+
+    draw_signature_box(
+        pdf,
+        first_x,
+        y,
+        box_width,
+        box_height,
+        "Student Signature",
+        student_signature_file,
+        "No signature",
+    )
+
+    draw_signature_box(
+        pdf,
+        second_x,
+        y,
+        box_width,
+        box_height,
+        "Approved By",
+        admin_signature_file,
+        "Admin signature not uploaded",
+    )
+
+    draw_gate_pass_qr_box(
+        pdf=pdf,
+        gate_pass=gate_pass,
+        page_width=page_width,
+        margin_x=margin_x,
+    )
+
+    pdf.save()
+
+    return f"/uploads/gate_pass_pdfs/{filename}"
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    ensure_directories()
+    Base.metadata.create_all(bind=engine)
+    seed_hall_rules_from_json()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+app.mount(
+    "/uploads",
+    StaticFiles(directory=str(UPLOADS_DIR), check_dir=False),
+    name="uploads",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.backend_cors_origins,
+    allow_origin_regex=settings.backend_cors_origin_regex,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "DIU Hall AI Backend is running",
+        "health": "/api/v1/health",
+        "docs": "/docs",
+        "frontend": settings.public_frontend_url,
+    }
+
+
+@app.get("/api/v1/health")
+def health_check():
+    return {
+        "message": "Backend is running",
+        "app_name": settings.app_name,
+        "environment": settings.app_env,
+    }
+
+
+@app.websocket("/api/v1/ws")
+async def realtime_websocket(
+    websocket: WebSocket,
+    db: Session = Depends(get_db),
+):
+    await websocket.accept()
+    registered = False
+
+    try:
+        auth_message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+
+        if auth_message.get("type") != "auth" or not auth_message.get("token"):
+            await websocket.send_json(
+                {"type": "connection.error", "message": "Authentication required"}
+            )
+            await websocket.close(code=1008)
+            return
+
+        payload = decode_access_token(auth_message["token"])
+        user_id = payload.get("sub") if payload else None
+
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            user_id = None
+
+        user = db.query(User).filter(User.id == user_id).first() if user_id else None
+
+        if not user or not user.is_active:
+            await websocket.send_json(
+                {"type": "connection.error", "message": "Invalid or expired token"}
+            )
+            await websocket.close(code=1008)
+            return
+
+        await realtime_manager.register(websocket, user.id, user.role)
+        registered = True
+
+        await websocket.send_json(
+            {
+                "type": "connection.ready",
+                "payload": {"user_id": user.id, "role": user.role},
+            }
+        )
+
+        while True:
+            message = await websocket.receive_json()
+
+            if message.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        pass
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+    finally:
+        if registered:
+            await realtime_manager.disconnect(websocket)
+
+
+@app.post("/api/v1/auth/register", response_model=UserResponse)
+def register_user(payload: UserRegister, db: Session = Depends(get_db)):
+    existing_email = db.query(User).filter(User.email == payload.email).first()
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    existing_student = db.query(User).filter(User.student_id == payload.student_id).first()
+    if existing_student:
+        raise HTTPException(status_code=400, detail="Student/Admin ID already registered")
+
+    user = User(
+        full_name=payload.full_name,
+        student_id=payload.student_id,
+        email=payload.email,
+        phone=payload.phone,
+        role=payload.role,
+        password_hash=hash_password(payload.password),
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
+@app.post("/api/v1/auth/login", response_model=TokenResponse)
+def login_user(payload: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token({"sub": str(user.id), "role": user.role})
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=user,
+    )
+
+
+@app.post("/api/v1/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    generic_message = (
+        "If an account exists for this email, a password reset link has been sent."
+    )
+
+    user = db.query(User).filter(User.email == str(payload.email)).first()
+
+    # Security: do not reveal whether the email exists.
+    if not user or not user.is_active:
+        return MessageResponse(message=generic_message)
+
+    token = create_password_reset_token(user.id, user.email)
+    query = urlencode({"token": token, "email": user.email})
+    reset_url = build_frontend_url(f"/reset-password?{query}")
+
+    background_tasks.add_task(
+        send_email,
+        user.email,
+        "Reset your DIU Hall AI password",
+        build_password_reset_email_text(user, reset_url),
+        build_password_reset_email_html(user, reset_url),
+    )
+
+    return MessageResponse(message=generic_message)
+
+
+@app.post("/api/v1/auth/reset-password", response_model=MessageResponse)
+def reset_password(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    if payload.new_password != payload.confirm_new_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 6 characters long",
+        )
+
+    token_data = decode_password_reset_token(payload.token)
+
+    if not token_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset link",
+        )
+
+    token_email = token_data.get("email")
+    token_user_id = token_data.get("sub")
+
+    if token_email != str(payload.email):
+        raise HTTPException(
+            status_code=400,
+            detail="Email does not match reset link",
+        )
+
+    try:
+        user_id = int(token_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reset link",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user or not user.is_active or user.email != str(payload.email):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reset request",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+
+    return MessageResponse(
+        message="Password reset successful. Please login with your new password."
+    )
+
+
+@app.get("/api/v1/auth/me", response_model=UserResponse)
+def get_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@app.post("/api/v1/users/me/signature", response_model=UserResponse)
+async def upload_my_signature(
+    signature: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not signature.filename:
+        raise HTTPException(status_code=400, detail="No file selected")
+
+    extension = Path(signature.filename).suffix.lower()
+    if extension not in [".png", ".jpg", ".jpeg"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PNG, JPG, and JPEG files are allowed",
+        )
+
+    ensure_directories()
+
+    if current_user.signature_image_path:
+        old_file = public_path_to_file(current_user.signature_image_path)
+        if old_file and old_file.exists():
+            old_file.unlink(missing_ok=True)
+
+    filename = f"user_{current_user.id}_{uuid4().hex}{extension}"
+    saved_path = STUDENT_SIGNATURE_DIR / filename
+
+    with saved_path.open("wb") as buffer:
+        shutil.copyfileobj(signature.file, buffer)
+
+    current_user.signature_image_path = f"/uploads/signatures/students/{filename}"
+
+    db.commit()
+    db.refresh(current_user)
+
+    await realtime_manager.broadcast(
+        "profile.changed",
+        {"action": "signature_updated", "user_id": current_user.id},
+        user_ids=[current_user.id],
+    )
+
+    return current_user
+
+
+@app.get("/api/v1/gate-passes", response_model=list[GatePassResponse])
+def list_gate_passes(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role == "admin":
+        return db.query(GatePass).order_by(GatePass.id.desc()).all()
+
+    return (
+        db.query(GatePass)
+        .filter(GatePass.student_id == current_user.student_id)
+        .order_by(GatePass.id.desc())
+        .all()
+    )
+
+
+@app.post("/api/v1/gate-passes", response_model=GatePassResponse)
+async def create_gate_pass(
+    payload: GatePassCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Only students can submit gate pass requests",
+        )
+
+    require_user_signature(
+        current_user,
+        "Please upload your signature before submitting a gate pass request.",
+    )
+
+    gate_pass = GatePass(
+        student_name=current_user.full_name,
+        student_id=current_user.student_id,
+        room_no=payload.room_no,
+        leave_date=payload.leave_date,
+        return_date=payload.return_date,
+        guardian_phone=payload.guardian_phone,
+        reason=payload.reason,
+        item_list=payload.item_list,
+        status="pending",
+        exit="No",
+    )
+
+    db.add(gate_pass)
+    db.commit()
+    db.refresh(gate_pass)
+
+    await realtime_manager.broadcast(
+        "gate_pass.changed",
+        {
+            "action": "created",
+            "gate_pass_id": gate_pass.id,
+            "student_id": gate_pass.student_id,
+        },
+        user_ids=[current_user.id],
+        roles=["admin"],
+    )
+
+    return gate_pass
+
+
+@app.post("/api/v1/gate-passes/{gate_pass_id}/approve", response_model=GatePassResponse)
+async def approve_gate_pass(
+    gate_pass_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    gate_pass = db.query(GatePass).filter(GatePass.id == gate_pass_id).first()
+    if not gate_pass:
+        raise HTTPException(status_code=404, detail="Gate pass not found")
+
+    student = db.query(User).filter(User.student_id == gate_pass.student_id).first()
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student account not found for this gate pass",
+        )
+
+    require_user_signature(
+        student,
+        "Student signature not uploaded yet",
+    )
+
+    require_user_signature(
+        current_user,
+        "Admin signature not uploaded yet. Please upload your signature before approving gate passes.",
+    )
+
+    gate_pass.status = "approved"
+    gate_pass.approved_by = current_user.full_name
+
+    if not gate_pass.verification_id:
+        gate_pass.verification_id = generate_gate_pass_verification_id(gate_pass)
+
+    gate_pass.qr_code_path = generate_gate_pass_qr_code(gate_pass)
+
+    gate_pass.pdf_path = generate_gate_pass_pdf(
+        gate_pass,
+        student,
+        current_user,
+    )
+
+    notify_user(
+        db=db,
+        background_tasks=background_tasks,
+        user=student,
+        title="Gate pass approved",
+        message=f"Gate pass GP-{gate_pass.id:04d} has been approved.",
+        category="gate_pass",
+        email_subject=f"Gate Pass Approved - GP-{gate_pass.id:04d}",
+        email_body=build_gate_pass_approved_email(
+            student=student,
+            gate_pass=gate_pass,
+            approved_admin=current_user,
+        ),
+        entity_type="gate_pass",
+        entity_id=gate_pass.id,
+        action_url="/gate-pass",
+    )
+
+    db.commit()
+    db.refresh(gate_pass)
+
+    await realtime_manager.broadcast(
+        "gate_pass.changed",
+        {
+            "action": "approved",
+            "gate_pass_id": gate_pass.id,
+            "student_id": gate_pass.student_id,
+            "verification_id": gate_pass.verification_id,
+        },
+        user_ids=[student.id],
+        roles=["admin", "gate_security"],
+    )
+    await realtime_manager.broadcast(
+        "notification.changed",
+        {"action": "created", "entity_type": "gate_pass", "entity_id": gate_pass.id},
+        user_ids=[student.id],
+    )
+
+    return gate_pass
+
+
+@app.post("/api/v1/gate-passes/{gate_pass_id}/reject", response_model=GatePassResponse)
+async def reject_gate_pass(
+    gate_pass_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_user_signature(
+        current_user,
+        "Admin signature not uploaded yet. Please upload your signature before rejecting gate passes.",
+    )
+
+    gate_pass = db.query(GatePass).filter(GatePass.id == gate_pass_id).first()
+    if not gate_pass:
+        raise HTTPException(status_code=404, detail="Gate pass not found")
+
+    student = db.query(User).filter(User.student_id == gate_pass.student_id).first()
+
+    gate_pass.status = "rejected"
+    gate_pass.approved_by = None
+    gate_pass.pdf_path = None
+    gate_pass.exit = "No"
+
+    if student:
+        notify_user(
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="Gate pass rejected",
+            message=f"Gate pass GP-{gate_pass.id:04d} has been rejected.",
+            category="gate_pass",
+            email_subject=f"Gate Pass Rejected - GP-{gate_pass.id:04d}",
+            email_body=build_gate_pass_rejected_email(
+                student=student,
+                gate_pass=gate_pass,
+            ),
+            entity_type="gate_pass",
+            entity_id=gate_pass.id,
+            action_url="/gate-pass",
+        )
+
+    db.commit()
+    db.refresh(gate_pass)
+
+    target_user_ids = [student.id] if student else []
+    await realtime_manager.broadcast(
+        "gate_pass.changed",
+        {
+            "action": "rejected",
+            "gate_pass_id": gate_pass.id,
+            "student_id": gate_pass.student_id,
+            "verification_id": gate_pass.verification_id,
+        },
+        user_ids=target_user_ids,
+        roles=["admin", "gate_security"],
+    )
+
+    if student:
+        await realtime_manager.broadcast(
+            "notification.changed",
+            {"action": "created", "entity_type": "gate_pass", "entity_id": gate_pass.id},
+            user_ids=[student.id],
+        )
+
+    return gate_pass
+
+
+@app.get(
+    "/api/v1/gate-security/gate-pass/{verification_id}",
+    response_model=GateSecurityVerificationResponse,
+)
+def verify_gate_pass_for_security(
+    verification_id: str,
+    _: User = Depends(require_gate_security),
+    db: Session = Depends(get_db),
+):
+    gate_pass = (
+        db.query(GatePass)
+        .filter(GatePass.verification_id == verification_id)
+        .first()
+    )
+
+    if not gate_pass:
+        return GateSecurityVerificationResponse(
+            status="invalid",
+            message="Invalid gate pass QR code.",
+            gate_pass=None,
+        )
+
+    if gate_pass.status != "approved":
+        return GateSecurityVerificationResponse(
+            status="not_approved",
+            message="This gate pass is not approved.",
+            gate_pass=gate_pass,
+        )
+
+    if gate_pass.used_at is not None or gate_pass.exit == "Yes":
+        return GateSecurityVerificationResponse(
+            status="already_used",
+            message="This gate pass has already been used.",
+            gate_pass=gate_pass,
+        )
+
+    return GateSecurityVerificationResponse(
+        status="valid",
+        message="Gate pass is valid.",
+        gate_pass=gate_pass,
+    )
+
+
+@app.post(
+    "/api/v1/gate-security/gate-pass/{verification_id}/use",
+    response_model=GateSecurityVerificationResponse,
+)
+async def use_gate_pass_for_security(
+    verification_id: str,
+    current_user: User = Depends(require_gate_security),
+    db: Session = Depends(get_db),
+):
+    gate_pass = (
+        db.query(GatePass)
+        .filter(GatePass.verification_id == verification_id)
+        .first()
+    )
+
+    if not gate_pass:
+        return GateSecurityVerificationResponse(
+            status="invalid",
+            message="Invalid gate pass QR code.",
+            gate_pass=None,
+        )
+
+    if gate_pass.status != "approved":
+        return GateSecurityVerificationResponse(
+            status="not_approved",
+            message="This gate pass is not approved.",
+            gate_pass=gate_pass,
+        )
+
+    if gate_pass.used_at is not None or gate_pass.exit == "Yes":
+        return GateSecurityVerificationResponse(
+            status="already_used",
+            message="This gate pass has already been used.",
+            gate_pass=gate_pass,
+        )
+
+    gate_pass.used_at = datetime.now(timezone.utc)
+    gate_pass.used_by_security_id = current_user.id
+    gate_pass.exit = "Yes"
+
+    db.commit()
+    db.refresh(gate_pass)
+
+    student = db.query(User).filter(User.student_id == gate_pass.student_id).first()
+    target_user_ids = [student.id] if student else []
+
+    await realtime_manager.broadcast(
+        "gate_pass.changed",
+        {
+            "action": "used",
+            "gate_pass_id": gate_pass.id,
+            "student_id": gate_pass.student_id,
+            "verification_id": gate_pass.verification_id,
+        },
+        user_ids=target_user_ids,
+        roles=["admin", "gate_security"],
+    )
+
+    return GateSecurityVerificationResponse(
+        status="used",
+        message="Gate pass marked as used successfully.",
+        gate_pass=gate_pass,
+    )
+
+
+@app.get("/api/v1/notices", response_model=list[NoticeResponse])
+def list_notices(db: Session = Depends(get_db)):
+    return db.query(Notice).order_by(Notice.id.desc()).all()
+
+
+@app.post("/api/v1/notices", response_model=NoticeResponse)
+async def create_notice(
+    payload: NoticeCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    notice = Notice(
+        title=payload.title,
+        content=payload.content,
+        deadline=payload.deadline,
+        posted_by=current_user.full_name,
+        created_at=datetime.combine(payload.publish_date, datetime.min.time()),
+    )
+
+    db.add(notice)
+    db.flush()
+
+    students = (
+        db.query(User)
+        .filter(User.role == "student")
+        .filter(User.is_active.is_(True))
+        .all()
+    )
+
+    for student in students:
+        notify_user(
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="New notice posted",
+            message=f"New notice: {notice.title}",
+            category="notice",
+            email_subject=f"New Hall Notice - {notice.title}",
+            email_body=build_notice_email(student, notice),
+            entity_type="notice",
+            entity_id=notice.id,
+            action_url="/notices",
+        )
+
+    db.commit()
+    db.refresh(notice)
+
+    await realtime_manager.broadcast(
+        "notice.changed",
+        {"action": "created", "notice_id": notice.id},
+        roles=["student", "admin"],
+    )
+    await realtime_manager.broadcast(
+        "notification.changed",
+        {"action": "created", "entity_type": "notice", "entity_id": notice.id},
+        roles=["student"],
+    )
+
+    return notice
+
+
+@app.get("/api/v1/notifications", response_model=list[NotificationResponse])
+def list_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(Notification)
+        .filter(Notification.recipient_user_id == current_user.id)
+        .order_by(Notification.created_at.desc(), Notification.id.desc())
+        .all()
+    )
+
+
+@app.post("/api/v1/notifications/{notification_id}/read", response_model=NotificationResponse)
+async def mark_notification_read(
+    notification_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    notification = (
+        db.query(Notification)
+        .filter(Notification.id == notification_id)
+        .filter(Notification.recipient_user_id == current_user.id)
+        .first()
+    )
+
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    notification.is_read = True
+    db.commit()
+    db.refresh(notification)
+
+    await realtime_manager.broadcast(
+        "notification.changed",
+        {"action": "read", "notification_id": notification.id},
+        user_ids=[current_user.id],
+    )
+
+    return notification
+
+
+@app.post("/api/v1/notifications/read-all")
+async def mark_all_notifications_read(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    (
+        db.query(Notification)
+        .filter(Notification.recipient_user_id == current_user.id)
+        .filter(Notification.is_read.is_(False))
+        .update({Notification.is_read: True}, synchronize_session=False)
+    )
+    db.commit()
+
+    await realtime_manager.broadcast(
+        "notification.changed",
+        {"action": "read_all"},
+        user_ids=[current_user.id],
+    )
+
+    return {"message": "All notifications marked as read."}
+
+
+@app.get("/api/v1/complaints", response_model=list[ComplaintResponse])
+def list_complaints(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role == "admin":
+        return db.query(Complaint).order_by(Complaint.id.desc()).all()
+
+    return (
+        db.query(Complaint)
+        .filter(Complaint.student_id == current_user.student_id)
+        .order_by(Complaint.id.desc())
+        .all()
+    )
+
+
+@app.post("/api/v1/complaints", response_model=ComplaintResponse)
+async def create_complaint(
+    payload: ComplaintCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != "student":
+        raise HTTPException(
+            status_code=403,
+            detail="Only students can submit complaints",
+        )
+
+    complaint = Complaint(
+        student_name=current_user.full_name,
+        student_id=current_user.student_id,
+        room_no=payload.room_no,
+        category=payload.category,
+        description=payload.description,
+        status="submitted",
+    )
+
+    db.add(complaint)
+    db.commit()
+    db.refresh(complaint)
+
+    await realtime_manager.broadcast(
+        "complaint.changed",
+        {
+            "action": "created",
+            "complaint_id": complaint.id,
+            "student_id": complaint.student_id,
+        },
+        user_ids=[current_user.id],
+        roles=["admin"],
+    )
+
+    return complaint
+
+
+@app.post("/api/v1/complaints/{complaint_id}/status", response_model=ComplaintResponse)
+async def update_complaint_status(
+    complaint_id: int,
+    payload: ComplaintStatusUpdate,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    complaint = db.query(Complaint).filter(Complaint.id == complaint_id).first()
+
+    if not complaint:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+
+    complaint.status = payload.status
+
+    student = db.query(User).filter(User.student_id == complaint.student_id).first()
+
+    if student:
+        notify_user(
+            db=db,
+            background_tasks=background_tasks,
+            user=student,
+            title="Complaint status updated",
+            message=f"Complaint #{complaint.id} status changed to {payload.status}.",
+            category="complaint",
+            email_subject=f"Complaint Status Updated - #{complaint.id}",
+            email_body=build_complaint_status_email(
+                student=student,
+                complaint=complaint,
+                status=payload.status,
+            ),
+            entity_type="complaint",
+            entity_id=complaint.id,
+            action_url="/complaints",
+        )
+
+    db.commit()
+    db.refresh(complaint)
+
+    target_user_ids = [student.id] if student else []
+    await realtime_manager.broadcast(
+        "complaint.changed",
+        {
+            "action": "status_updated",
+            "complaint_id": complaint.id,
+            "student_id": complaint.student_id,
+            "status": complaint.status,
+        },
+        user_ids=target_user_ids,
+        roles=["admin"],
+    )
+
+    if student:
+        await realtime_manager.broadcast(
+            "notification.changed",
+            {"action": "created", "entity_type": "complaint", "entity_id": complaint.id},
+            user_ids=[student.id],
+        )
+
+    return complaint
+
+
+@app.post("/api/v1/dev/test-email")
+def test_email(
+    payload: TestEmailRequest,
+    background_tasks: BackgroundTasks,
+    _: User = Depends(require_admin),
+):
+    if settings.app_env == "production":
+        raise HTTPException(
+            status_code=403,
+            detail="Email testing is disabled in production.",
+        )
+
+    test_subject = "DIU Hall AI email test"
+    test_body = (
+        "This is a test email from DIU Hall AI Assistant. "
+        "If you received this, SMTP email notifications are working."
+    )
+
+    background_tasks.add_task(send_email, payload.to_email, test_subject, test_body)
+
+    return {"message": "Test email scheduled"}
+
+
+@app.get("/api/v1/admin/rules", response_model=list[HallRuleResponse])
+def list_hall_rules(
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(HallRule)
+        .filter(HallRule.is_active.is_(True))
+        .order_by(HallRule.rule_number.asc())
+        .all()
+    )
+
+
+@app.post("/api/v1/admin/rules", response_model=HallRuleResponse)
+async def create_hall_rule(
+    payload: HallRuleCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    existing_rule = (
+        db.query(HallRule)
+        .filter(HallRule.rule_number == payload.rule_number)
+        .first()
+    )
+
+    if existing_rule:
+        if not existing_rule.is_active:
+            existing_rule.section = payload.section
+            existing_rule.page = payload.page
+            existing_rule.text = payload.text
+            existing_rule.is_active = True
+
+            db.commit()
+            db.refresh(existing_rule)
+
+            upsert_rule_to_vector_db(existing_rule)
+
+            notify_all_users_about_new_rule(
+                db=db,
+                background_tasks=background_tasks,
+                rule=existing_rule,
+                added_by=current_user,
+            )
+
+            db.commit()
+            db.refresh(existing_rule)
+
+            await realtime_manager.broadcast(
+                "hall_rule.changed",
+                {"action": "created", "rule_id": existing_rule.id},
+                roles=["admin"],
+            )
+            await realtime_manager.broadcast(
+                "notification.changed",
+                {"action": "created", "entity_type": "hall_rule", "entity_id": existing_rule.id},
+                roles=["student", "admin"],
+            )
+
+            return existing_rule
+
+        raise HTTPException(
+            status_code=400,
+            detail="A rule with this rule number already exists.",
+        )
+
+    rule = HallRule(
+        rule_number=payload.rule_number,
+        section=payload.section,
+        page=payload.page,
+        text=payload.text,
+        is_active=True,
+    )
+
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+
+    upsert_rule_to_vector_db(rule)
+
+    notify_all_users_about_new_rule(
+        db=db,
+        background_tasks=background_tasks,
+        rule=rule,
+        added_by=current_user,
+    )
+
+    db.commit()
+    db.refresh(rule)
+
+    await realtime_manager.broadcast(
+        "hall_rule.changed",
+        {"action": "created", "rule_id": rule.id},
+        roles=["admin"],
+    )
+    await realtime_manager.broadcast(
+        "notification.changed",
+        {"action": "created", "entity_type": "hall_rule", "entity_id": rule.id},
+        roles=["student", "admin"],
+    )
+
+    return rule
+
+
+@app.put("/api/v1/admin/rules/{rule_id}", response_model=HallRuleResponse)
+async def update_hall_rule(
+    rule_id: int,
+    payload: HallRuleUpdate,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rule = db.query(HallRule).filter(HallRule.id == rule_id).first()
+
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+
+    old_rule_number = rule.rule_number
+    update_data = payload.model_dump(exclude_unset=True)
+
+    if "rule_number" in update_data:
+        duplicate_rule = (
+            db.query(HallRule)
+            .filter(HallRule.rule_number == update_data["rule_number"])
+            .filter(HallRule.id != rule_id)
+            .first()
+        )
+
+        if duplicate_rule:
+            raise HTTPException(
+                status_code=400,
+                detail="Another rule with this rule number already exists.",
+            )
+
+    for key, value in update_data.items():
+        setattr(rule, key, value)
+
+    db.commit()
+    db.refresh(rule)
+
+    if old_rule_number != rule.rule_number:
+        delete_rule_from_vector_db(old_rule_number)
+
+    upsert_rule_to_vector_db(rule)
+
+    await realtime_manager.broadcast(
+        "hall_rule.changed",
+        {"action": "updated", "rule_id": rule.id},
+        roles=["admin"],
+    )
+
+    return rule
+
+
+@app.delete("/api/v1/admin/rules/{rule_id}")
+async def delete_hall_rule(
+    rule_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rule = db.query(HallRule).filter(HallRule.id == rule_id).first()
+
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+
+    rule_number = rule.rule_number
+
+    delete_rule_from_vector_db(rule_number)
+
+    db.delete(rule)
+    db.commit()
+
+    await realtime_manager.broadcast(
+        "hall_rule.changed",
+        {"action": "deleted", "rule_id": rule_id, "rule_number": rule_number},
+        roles=["admin"],
+    )
+
+    return {
+        "message": "Rule deleted successfully.",
+        "rule_number": rule_number,
+    }
+
+
+@app.post("/api/v1/admin/rules/rebuild-index")
+async def rebuild_hall_rule_index(
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    rules = (
+        db.query(HallRule)
+        .filter(HallRule.is_active.is_(True))
+        .order_by(HallRule.rule_number.asc())
+        .all()
+    )
+
+    total_indexed = rebuild_vector_db(rules)
+
+    await realtime_manager.broadcast(
+        "hall_rule.changed",
+        {"action": "index_rebuilt", "total_rules": total_indexed},
+        roles=["admin"],
+    )
+
+    return {
+        "message": "Rule vector index rebuilt successfully.",
+        "total_rules": total_indexed,
+    }
+
+
+@app.get("/api/v1/chat/sessions", response_model=list[ChatSessionResponse])
+def list_my_chat_sessions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == current_user.id)
+        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
+        .all()
+    )
+
+
+@app.post("/api/v1/chat/sessions", response_model=ChatSessionResponse)
+def create_chat_session(
+    payload: ChatSessionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    title = build_chat_title(payload.title)
+
+    session = ChatSession(
+        user_id=current_user.id,
+        title=title,
+        updated_at=datetime.utcnow(),
+    )
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    return session
+
+
+@app.patch("/api/v1/chat/sessions/{session_id}", response_model=ChatSessionResponse)
+def rename_chat_session(
+    session_id: int,
+    payload: ChatRenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    session.title = build_chat_title(payload.title)
+    session.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(session)
+
+    return session
+
+
+@app.delete("/api/v1/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    db.delete(session)
+    db.commit()
+
+    return {"message": "Chat session deleted successfully"}
+
+
+@app.get(
+    "/api/v1/chat/sessions/{session_id}/messages",
+    response_model=list[ChatMessageResponse],
+)
+def list_chat_messages(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id)
+        .filter(ChatSession.user_id == current_user.id)
+        .first()
+    )
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+        .all()
+    )
+
+    return [
+        ChatMessageResponse(
+            id=message.id,
+            session_id=message.session_id,
+            role=message.role,
+            text=message.text,
+            matched_rules=parse_matched_rules(message.matched_rules_json),
+            created_at=message.created_at,
+        )
+        for message in messages
+    ]
+
+
+@app.post("/api/v1/chat", response_model=ChatResponse)
+def chatbot_reply(
+    payload: ChatSendRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    message_text = payload.message.strip()
+
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    session = None
+
+    if payload.session_id is not None:
+        session = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == payload.session_id)
+            .filter(ChatSession.user_id == current_user.id)
+            .first()
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+    if session is None:
+        session = ChatSession(
+            user_id=current_user.id,
+            title=build_chat_title(message_text),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+    if session.title == "New chat":
+        session.title = build_chat_title(message_text)
+
+    user_message = ChatMessage(
+        session_id=session.id,
+        role="user",
+        text=message_text,
+    )
+    db.add(user_message)
+
+    result = answer_question(db, message_text)
+    matched_rules = result.get("matched_rules", [])
+
+    assistant_message = ChatMessage(
+        session_id=session.id,
+        role="assistant",
+        text=result["answer"],
+        matched_rules_json=json.dumps(matched_rules),
+    )
+    db.add(assistant_message)
+
+    session.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    return ChatResponse(
+        session_id=session.id,
+        answer=result["answer"],
+        matched_rules=matched_rules,
+    )
